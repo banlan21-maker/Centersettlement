@@ -2,16 +2,17 @@
 create extension if not exists "uuid-ossp";
 
 -- Teachers Table
-create table teachers (
+create table if not exists teachers (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
+  birth_date date,
   commission_rate numeric default 0.0,
   status text default 'active',
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
 -- Vouchers Table
-create table vouchers (
+create table if not exists vouchers (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   support_amount integer default 0,
@@ -20,7 +21,7 @@ create table vouchers (
 );
 
 -- Clients Table
-create table clients (
+create table if not exists clients (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   birth_date date,
@@ -28,7 +29,7 @@ create table clients (
 );
 
 -- Sessions (Class Records) Table
-create table sessions (
+create table if not exists sessions (
   id uuid primary key default uuid_generate_v4(),
   date date not null,
   teacher_id uuid references teachers(id) on delete set null,
@@ -41,11 +42,32 @@ create table sessions (
 );
 
 -- Session Vouchers Junction Table
-create table session_vouchers (
+create table if not exists session_vouchers (
   id uuid primary key default uuid_generate_v4(),
   session_id uuid references sessions(id) on delete cascade,
   voucher_id uuid references vouchers(id) on delete cascade
 );
+
+-- Client Vouchers Junction Table (Client-specific Copay)
+create table if not exists client_vouchers (
+  id uuid primary key default uuid_generate_v4(),
+  client_id uuid references clients(id) on delete cascade,
+  voucher_id uuid references vouchers(id) on delete cascade,
+  copay integer default 0,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Teacher Clients Junction Table (Assignments)
+create table if not exists teacher_clients (
+  id uuid primary key default uuid_generate_v4(),
+  teacher_id uuid references teachers(id) on delete cascade,
+  client_id uuid references clients(id) on delete cascade,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Schema Updates (Ensure columns exist if table already existed)
+alter table teachers add column if not exists birth_date date;
+alter table clients add column if not exists birth_date date;
 
 -- RLS Policies
 alter table teachers enable row level security;
@@ -53,3 +75,42 @@ alter table vouchers enable row level security;
 alter table clients enable row level security;
 alter table sessions enable row level security;
 alter table session_vouchers enable row level security;
+alter table client_vouchers enable row level security;
+alter table teacher_clients enable row level security;
+
+-- Public Access Policies (Development Only)
+drop policy if exists "Allow public access" on teachers;
+create policy "Allow public access" on teachers for all using (true);
+
+drop policy if exists "Allow public access" on vouchers;
+create policy "Allow public access" on vouchers for all using (true);
+
+drop policy if exists "Allow public access" on clients;
+create policy "Allow public access" on clients for all using (true);
+
+drop policy if exists "Allow public access" on sessions;
+create policy "Allow public access" on sessions for all using (true);
+
+drop policy if exists "Allow public access" on session_vouchers;
+create policy "Allow public access" on session_vouchers for all using (true);
+
+drop policy if exists "Allow public access" on client_vouchers;
+create policy "Allow public access" on client_vouchers for all using (true);
+
+drop policy if exists "Allow public access" on teacher_clients;
+create policy "Allow public access" on teacher_clients for all using (true);
+
+-- Center Settings Table
+create table if not exists center_settings (
+  id uuid primary key default uuid_generate_v4(),
+  center_name text,
+  business_number text,
+  representative_name text,
+  phone_number text,
+  base_fee integer default 55000,
+  extra_fee_per_10min integer default 10000,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table center_settings enable row level security;
+create policy "Allow public access" on center_settings for all using (true);
