@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { FileText, Download, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { FileText, Download, Trash2, ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { toast } from 'sonner'
 import { format, addDays, subDays, addMonths, subMonths, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval, addWeeks, subWeeks, parseISO } from 'date-fns'
 import { ko } from 'date-fns/locale'
@@ -19,6 +20,8 @@ export default function ReportPage() {
     const [loading, setLoading] = useState(true)
 
     // View State
+    const [viewMode, setViewMode] = useState<ViewMode>('monthly')
+    const [currentDate, setCurrentDate] = useState(new Date())
     const [searchTerm, setSearchTerm] = useState('')
     const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null)
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
