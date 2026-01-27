@@ -39,7 +39,8 @@ export default function RecordPage() {
         totalFee: number,
         voucherSupport: number,
         clientCost: number,
-        breakdown: string[]
+        breakdown: string[],
+        voucherUsageMap?: Record<string, number>
     } | null>(null)
 
     useEffect(() => {
