@@ -68,7 +68,9 @@ create table if not exists teacher_clients (
 
 -- Schema Updates (Ensure columns exist if table already existed)
 alter table teachers add column if not exists birth_date date;
+alter table teachers add column if not exists phone_number text;
 alter table clients add column if not exists birth_date date;
+alter table clients add column if not exists phone_number text;
 
 -- RLS Policies
 alter table teachers enable row level security;
