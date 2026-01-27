@@ -91,47 +91,7 @@ export default function SettingsPage() {
 
     // (Lines 286-533 unchanged)
 
-    {/* Vouchers Tab */ }
-    <TabsContent value="vouchers" className="space-y-4">
-        <Card className={editingVoucherId ? "border-primary" : ""}>
-            <CardHeader className="pb-3 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium">{editingVoucherId ? '바우처 수정' : '새 바우처 등록'}</CardTitle>
-                {editingVoucherId && <Button variant="ghost" size="sm" onClick={resetVoucherForm}><X className="w-4 h-4 mr-1" />취소</Button>}
-            </CardHeader>
-            <CardContent className="space-y-2">
-                <Input placeholder="바우처명" value={newVoucherName} onChange={e => setNewVoucherName(e.target.value)} />
-                <Input placeholder="월 지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
-                <Input placeholder="1회 차감액(지원금 기준) (원)" type="number" value={newVoucherDefaultFee} onChange={e => setNewVoucherDefaultFee(e.target.value)} />
-                <Button onClick={editingVoucherId ? updateVoucher : addVoucher} className="w-full">
-                    {editingVoucherId ? '수정 완료' : '추가'}
-                </Button>
-            </CardContent>
-        </Card>
 
-        <div className="space-y-2">
-            {vouchers.map(v => (
-                <div key={v.id} className={`flex justify-between items-center p-3 bg-white rounded-lg border shadow-sm ${editingVoucherId === v.id ? 'border-primary bg-blue-50' : ''}`}>
-                    <div>
-                        <div className="font-medium">{v.name}</div>
-                        <div className="text-sm text-gray-500">
-                            월 {v.support_amount?.toLocaleString()}원
-                            <span className="ml-2 text-blue-600">
-                                (1회 {v.default_fee?.toLocaleString()}원 차감)
-                            </span>
-                        </div>
-                    </div>
-                    <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => startEditVoucher(v)}>
-                            <Pencil className="w-4 h-4 text-blue-500" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteVoucher(v.id)}>
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                        </Button>
-                    </div>
-                </div>
-            ))}
-        </div>
-    </TabsContent>
     const [filteredClients, setFilteredClients] = useState<any[]>([]) // Displayed clients
     const [newClientName, setNewClientName] = useState('')
     const [newClientBirthDate, setNewClientBirthDate] = useState('')
@@ -592,7 +552,8 @@ export default function SettingsPage() {
                         </CardHeader>
                         <CardContent className="space-y-2">
                             <Input placeholder="바우처명" value={newVoucherName} onChange={e => setNewVoucherName(e.target.value)} />
-                            <Input placeholder="지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
+                            <Input placeholder="월 지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
+                            <Input placeholder="1회 차감액(지원금 기준) (원)" type="number" value={newVoucherDefaultFee} onChange={e => setNewVoucherDefaultFee(e.target.value)} />
                             <Button onClick={editingVoucherId ? updateVoucher : addVoucher} className="w-full">
                                 {editingVoucherId ? '수정 완료' : '추가'}
                             </Button>
@@ -604,7 +565,12 @@ export default function SettingsPage() {
                             <div key={v.id} className={`flex justify-between items-center p-3 bg-white rounded-lg border shadow-sm ${editingVoucherId === v.id ? 'border-primary bg-blue-50' : ''}`}>
                                 <div>
                                     <div className="font-medium">{v.name}</div>
-                                    <div className="text-sm text-gray-500">지원: {v.support_amount?.toLocaleString()}원</div>
+                                    <div className="text-sm text-gray-500">
+                                        월 {v.support_amount?.toLocaleString()}원
+                                        <span className="ml-2 text-blue-600">
+                                            (1회 {v.default_fee?.toLocaleString()}원 차감)
+                                        </span>
+                                    </div>
                                 </div>
                                 <div className="flex gap-1">
                                     <Button variant="ghost" size="icon" onClick={() => startEditVoucher(v)}>
@@ -645,13 +611,16 @@ export default function SettingsPage() {
                                             <span>{v.name}</span>
                                         </div>
                                         {clientVoucherSelections[v.id]?.selected && (
-                                            <Input
-                                                placeholder="본인부담금"
-                                                type="number"
-                                                className="w-24 h-8 text-sm"
-                                                value={clientVoucherSelections[v.id]?.copay}
-                                                onChange={e => handleVoucherCopayChange(v.id, e.target.value)}
-                                            />
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs text-gray-500 whitespace-nowrap">1회당 본인부담금:</span>
+                                                <Input
+                                                    placeholder="본인부담금"
+                                                    type="number"
+                                                    className="w-24 h-8 text-sm"
+                                                    value={clientVoucherSelections[v.id]?.copay}
+                                                    onChange={e => handleVoucherCopayChange(v.id, e.target.value)}
+                                                />
+                                            </div>
                                         )}
                                     </div>
                                 ))}
