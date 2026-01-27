@@ -137,12 +137,18 @@ export default function RecordPage() {
         let totalSupport = 0
         let totalFixedCopay = 0
 
+        // Track specific usage per voucher to save later
+        const voucherUsageMap: Record<string, number> = {}
+
         // 2. Multi-Voucher Logic
         if (selectedVouchers.length > 0) {
             // Fetch session history for limit check for ALL selected vouchers
             const startOfMonth = new Date(date)
             startOfMonth.setDate(1)
             const startStr = format(startOfMonth, 'yyyy-MM-dd')
+            // End of month
+            const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
+            const endStr = format(endOfMonth, 'yyyy-MM-dd')
 
             for (const vid of selectedVouchers) {
                 const voucher = vouchers.find(v => v.id === vid)
@@ -152,25 +158,16 @@ export default function RecordPage() {
                     const limit = voucher.support_amount || 0
                     const fixedCopay = clientVoucher.copay || 0
 
-                    // Fetch usage for THIS voucher
-                    const { data: monthSessions } = await supabase
-                        .from('sessions')
-                        .select(`total_fee, session_vouchers!inner(voucher_id)`)
-                        .eq('client_id', selectedClient)
-                        .eq('session_vouchers.voucher_id', vid)
-                        .gte('date', startStr)
-                        .lte('date', format(new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0), 'yyyy-MM-dd'))
+                    // Fetch actual usage from session_vouchers table
+                    const { data: usageData } = await supabase
+                        .from('session_vouchers')
+                        .select('used_amount, sessions!inner(date, client_id)')
+                        .eq('voucher_id', vid)
+                        .eq('sessions.client_id', selectedClient)
+                        .gte('sessions.date', startStr)
+                        .lte('sessions.date', endStr)
 
-                    // Note: This usage calculation is tricky with multi-voucher history because total_fee is per session.
-                    // If a past session used multiple vouchers, how was 'usedAmount' tracked per voucher?
-                    // Currently schema doesn't track support amount PER VOUCHER in session_vouchers.
-                    // It just tracks total_support in sessions.
-                    // Simplified Assumption: The full 'total_fee' of a past session counts against the limit of ANY voucher used in it?
-                    // OR, ideally we split it. But we don't store the split. 
-                    // Let's assume proportional or full - simpler: Full total_fee counts against limit if that voucher was involved.
-                    // (This is conservative).
-
-                    const usedAmount = monthSessions?.reduce((sum, s) => sum + (s.total_fee || 0), 0) || 0
+                    const usedAmount = usageData?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
                     const remainingLimit = Math.max(0, limit - usedAmount)
 
                     // Calculate support from this voucher
@@ -179,10 +176,20 @@ export default function RecordPage() {
 
                     feeRemaining -= support
                     totalSupport += support
+
+                    // Fixed copay is added ONCE per voucher used? 
+                    // Usually yes, if you use a voucher you pay the copay associated with it.
+                    // But if support is 0 because limit is full, do you still pay copay?
+                    // Let's assume yes, if selected, it applies. But if support is 0, maybe not?
+                    // User said "1회 수업때 1개 이상의 바우처를 사용할수있음".
+                    // Let's stick to simple rule: If selected, it contributes support and copay.
                     totalFixedCopay += fixedCopay
 
+                    voucherUsageMap[vid] = support
+
                     breakdown.push(`--- ${voucher.name} ---`)
-                    breakdown.push(`월 한도: ${limit.toLocaleString()} / 잔여: ${remainingLimit.toLocaleString()}`)
+                    breakdown.push(`월 한도: ${limit.toLocaleString()} / 이번 달 사용: ${usedAmount.toLocaleString()}`)
+                    breakdown.push(`잔여 한도: ${remainingLimit.toLocaleString()}`)
                     breakdown.push(`지원금 적용: -${support.toLocaleString()}원`)
                     breakdown.push(`고정 부담금: +${fixedCopay.toLocaleString()}원`)
 
@@ -206,7 +213,8 @@ export default function RecordPage() {
             totalFee,
             voucherSupport: totalSupport,
             clientCost: finalClientCost,
-            breakdown
+            breakdown,
+            voucherUsageMap // Pass this to submit handler
         })
     }
 
@@ -231,7 +239,8 @@ export default function RecordPage() {
         if (selectedVouchers.length > 0) {
             const voucherLinks = selectedVouchers.map(vid => ({
                 session_id: session.id,
-                voucher_id: vid
+                voucher_id: vid,
+                used_amount: (calcResult as any).voucherUsageMap?.[vid] || 0
             }))
             await supabase.from('session_vouchers').insert(voucherLinks)
         }

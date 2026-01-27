@@ -45,7 +45,8 @@ create table if not exists sessions (
 create table if not exists session_vouchers (
   id uuid primary key default uuid_generate_v4(),
   session_id uuid references sessions(id) on delete cascade,
-  voucher_id uuid references vouchers(id) on delete cascade
+  voucher_id uuid references vouchers(id) on delete cascade,
+  used_amount integer default 0
 );
 
 -- Client Vouchers Junction Table (Client-specific Copay)
