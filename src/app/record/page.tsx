@@ -7,12 +7,20 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { toast } from 'sonner'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { format } from 'date-fns'
 
 export default function RecordPage() {
     const supabase = createClient()
     const router = useRouter()
+    const searchParams = useSearchParams()
+
+    // Query Params for Pre-filling (from Schedule)
+    const qDate = searchParams.get('date')
+    const qTime = searchParams.get('time')
+    const qDuration = searchParams.get('duration')
+    const qTeacherId = searchParams.get('teacherId')
+    const qClientId = searchParams.get('clientId')
 
     const [teachers, setTeachers] = useState<any[]>([])
     const [clients, setClients] = useState<any[]>([])
@@ -24,15 +32,15 @@ export default function RecordPage() {
     // Center Settings
     const [centerSettings, setCenterSettings] = useState<any>(null)
 
-    const [selectedTeacher, setSelectedTeacher] = useState('')
-    const [selectedClient, setSelectedClient] = useState('')
+    const [selectedTeacher, setSelectedTeacher] = useState(qTeacherId || '')
+    const [selectedClient, setSelectedClient] = useState(qClientId || '')
     const [selectedVouchers, setSelectedVouchers] = useState<string[]>([])
     const [filteredClients, setFilteredClients] = useState<any[]>([])
     const [filteredVouchers, setFilteredVouchers] = useState<any[]>([])
 
-    const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'))
-    const [startTime, setStartTime] = useState('10:00')
-    const [duration, setDuration] = useState('40')
+    const [date, setDate] = useState(qDate || format(new Date(), 'yyyy-MM-dd'))
+    const [startTime, setStartTime] = useState(qTime || '10:00')
+    const [duration, setDuration] = useState(qDuration || '40')
 
     // Calculation Results
     const [calcResult, setCalcResult] = useState<{

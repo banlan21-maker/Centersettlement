@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, PlusCircle, FileText, Settings } from 'lucide-react'
+import { Home, PlusCircle, FileText, Settings, Calendar } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default function BottomNav() {
@@ -10,6 +10,7 @@ export default function BottomNav() {
 
     const navItems = [
         { href: '/', label: '홈', icon: Home },
+        { href: '/schedule', label: '시간표', icon: Calendar },
         { href: '/record', label: '수업입력', icon: PlusCircle },
         { href: '/report', label: '정산보고서', icon: FileText },
         { href: '/settings', label: '설정', icon: Settings },

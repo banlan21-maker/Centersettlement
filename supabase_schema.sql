@@ -118,3 +118,33 @@ create table if not exists center_settings (
 
 alter table center_settings enable row level security;
 create policy "Allow public access" on center_settings for all using (true);
+
+-- Rooms Table
+create table if not exists rooms (
+  id uuid primary key default uuid_generate_v4(),
+  center_id uuid, -- For future multi-tenant support (optional now)
+  name text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Schedules Table
+create table if not exists schedules (
+  id uuid primary key default uuid_generate_v4(),
+  room_id uuid references rooms(id) on delete set null,
+  teacher_id uuid references teachers(id) on delete set null,
+  client_id uuid references clients(id) on delete set null,
+  start_time timestamp with time zone not null,
+  end_time timestamp with time zone not null,
+  status text default 'scheduled', -- 'scheduled', 'completed', 'cancelled'
+  memo text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- RLS
+alter table rooms enable row level security;
+drop policy if exists "Allow public access" on rooms;
+create policy "Allow public access" on rooms for all using (true);
+
+alter table schedules enable row level security;
+drop policy if exists "Allow public access" on schedules;
+create policy "Allow public access" on schedules for all using (true);

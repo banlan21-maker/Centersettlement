@@ -112,6 +112,10 @@ export default function SettingsPage() {
     const [baseFee, setBaseFee] = useState('55000')
     const [extraFee, setExtraFee] = useState('10000')
 
+    // Rooms State
+    const [rooms, setRooms] = useState<any[]>([])
+    const [newRoomName, setNewRoomName] = useState('')
+
     useEffect(() => {
         fetchData()
     }, [])
@@ -170,6 +174,10 @@ export default function SettingsPage() {
                 setBaseFee(cs.base_fee?.toString() || '55000')
                 setExtraFee(cs.extra_fee_per_10min?.toString() || '10000')
             }
+
+            // Fetch Rooms
+            const { data: r } = await supabase.from('rooms').select('*').order('created_at')
+            if (r) setRooms(r)
         } catch (e) {
             console.error(e)
         }
@@ -202,6 +210,25 @@ export default function SettingsPage() {
         }
     }
 
+
+
+    // --- Rooms ---
+    const addRoom = async () => {
+        if (!newRoomName) return
+        const { error } = await supabase.from('rooms').insert({ name: newRoomName })
+        if (error) toast.error('실패: ' + error.message)
+        else {
+            toast.success('강의실 추가 완료')
+            setNewRoomName('')
+            fetchData()
+        }
+    }
+
+    const deleteRoom = async (id: string) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return
+        await supabase.from('rooms').delete().eq('id', id)
+        fetchData()
+    }
 
     // --- Teachers ---
     const addTeacher = async () => {
@@ -459,6 +486,34 @@ export default function SettingsPage() {
                             </div>
 
                             <Button onClick={saveCenterSettings} className="w-full mt-4">설정 저장</Button>
+                        </CardContent>
+                    </Card>
+
+                    {/* Room Management */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>강의실(치료실) 관리</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex gap-2">
+                                <Input
+                                    placeholder="강의실 이름 (예: 101호, 언어치료실)"
+                                    value={newRoomName}
+                                    onChange={e => setNewRoomName(e.target.value)}
+                                />
+                                <Button onClick={addRoom}>추가</Button>
+                            </div>
+                            <div className="space-y-2">
+                                {rooms.map(room => (
+                                    <div key={room.id} className="flex justify-between items-center p-3 bg-white rounded-lg border shadow-sm">
+                                        <span>{room.name}</span>
+                                        <Button variant="ghost" size="icon" onClick={() => deleteRoom(room.id)}>
+                                            <Trash2 className="w-4 h-4 text-red-500" />
+                                        </Button>
+                                    </div>
+                                ))}
+                                {rooms.length === 0 && <p className="text-sm text-gray-500 text-center py-4">등록된 강의실이 없습니다.</p>}
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>
