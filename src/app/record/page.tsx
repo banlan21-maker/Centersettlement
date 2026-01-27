@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,7 +10,7 @@ import { toast } from 'sonner'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { format } from 'date-fns'
 
-export default function RecordPage() {
+function RecordContent() {
     const supabase = createClient()
     const router = useRouter()
     const searchParams = useSearchParams()
@@ -236,58 +236,6 @@ export default function RecordPage() {
             const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
             const fixedCopay = clientVoucher?.copay || 0
 
-            // Client pays Fixed Copay... PLUS any fee remaining?
-            // "1회 수업료 6만원 = 바우처 차감(Limit deduction) 6만원". 
-            // If Limit has space, deducted 60k. Client Cost = 10k (Fixed).
-            // If Limit has 0 space, deducted 0. Client Cost = 10k + 50k(uncovered)? or 60k?
-            // "한도 초과/미지원 차액" should be paid by client.
-            // If covered: Cost = Fixed Copay.
-            // If uncovered: Cost = Fixed Copay + Uncovered Amount.
-            // But wait, if Deducted 60k includes the Copay portion (as per user's 60k example), 
-            // then we shouldn't double charge.
-            // Actually, in the user's example:
-            // "1회당 6만원이 빠지는거지" (Deducted from Limit).
-            // "개인부담금 1만원".
-            // If the Limit tracks the Groos Value (Support + Copay), then the Voucher is basically a "Debit Card" loaded with Gross Limit.
-            // And the Client pays 10k cash *to the center*? Or is 10k just a calculated value?
-            // "내담자에게 돈을 더받던지.." -> Client pays cash.
-            // If 60k deducted from Voucher, and Client pays 10k Cash. The Center gets 60k + 10k = 70k? No.
-            // The 10k is likely "Copay" that is *part* of determining the 60k, but paid by client.
-            // IF Limit covers 60k, does the Voucher provider pay 60k?
-            // Usually Voucher pays (LimitDeduction - Copay).
-            // So if Deducted 60k, and Copay is 10k, Voucher pays 50k.
-            // Center revenue = 50k (Voucher) + 10k (Client) = 60k. Matches.
-            // So, Client Cost is ALWAYS `Fixed Copay`. (Plus excess if limit reached).
-            // But if Limit reached (Deducted 0), then Client pays Full 60k?
-            // Yes.
-            // So logic: ClientCost = FixedCopay + (SessionFee - Deducted - FixedCopay)? 
-            // No.
-            // If Deducted = 60k. ClientCost = 10k.
-            // If Deducted = 0. ClientCost = 60k.
-            // Formula: `ClientCost = SessionFee - (Deducted - FixedCopay)`? No.
-            // If D=60, C=10. S=60. 60 - (60-10) = 10. Correct.
-            // If D=0, C=10. S=60. 60 - (0 - 10)? No.
-            // Let's look at coverage.
-            // The "Voucher Support" part is what saves the client money.
-            // Real Voucher Support = Deducted Amount - Fixed Copay.
-            // (Assumes Deducted Amount always >= Fixed Copay. If not, only partial support).
-            // Client Pay = Session Fee - Real Voucher Support.
-            // = Session Fee - (Deducted - Fixed Copay) = Session Fee - Deducted + Fixed Copay.
-            // Example: S=60, D=60, F=10. Pay = 60 - 60 + 10 = 10. Correct.
-            // Example: S=60, D=0 (Empty). Pay = 60 - 0 + 10 = 70? No, should be 60.
-            // Why? Because if no voucher, fixed copay logic might not apply or applies differently.
-            // If Limit is 0, it's just a cash session.
-            // But if we treat it as "Voucher used but empty":
-            // Real Support from Voucher = Max(0, Deducted - Fixed Copay).
-            // If D=0, Support=0. Pay = 60 - 0 = 60. Correct.
-            // If D=40 (Partial), F=10. Support = 30. Pay = 60 - 30 = 30. Correct.
-            // (Deducted 40 means 30 Gov + 10 User? Or just 40 Gov?)
-            // User example: "60k deducted". This is "Gross".
-            // So implicit Gov portion is 50k.
-            // I will use: `Client Cost = Session Fee - Max(0, TotalDeducted - FixedCopay)`.
-            // Wait, this assumes the "Deduction" contains the fixed copay.
-            // Yes, user said "1회당 6만원(5+1)이 빠지는거지".
-
             const realSupport = Math.max(0, totalDeducted - fixedCopay)
             finalClientCost = sessionFee - realSupport
 
@@ -476,5 +424,13 @@ export default function RecordPage() {
                 </Button>
             </div>
         </div>
+    )
+}
+
+export default function RecordPage() {
+    return (
+        <Suspense fallback={<div className="p-4 text-center">로딩중...</div>}>
+            <RecordContent />
+        </Suspense>
     )
 }
