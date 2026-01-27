@@ -410,7 +410,7 @@ export default function SettingsPage() {
 
     return (
         <div className="p-4 pb-24 space-y-4">
-            <h1 className="text-2xl font-bold mb-4">기초 설정</h1>
+            <h1 className="text-2xl font-bold mb-4">설정</h1>
 
             <Tabs defaultValue="center">
                 <TabsList className="w-full">

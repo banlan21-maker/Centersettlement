@@ -11,7 +11,7 @@ export default function BottomNav() {
     const navItems = [
         { href: '/', label: '홈', icon: Home },
         { href: '/record', label: '수업입력', icon: PlusCircle },
-        { href: '/report', label: '정산', icon: FileText },
+        { href: '/report', label: '정산보고서', icon: FileText },
         { href: '/settings', label: '설정', icon: Settings },
     ]
 

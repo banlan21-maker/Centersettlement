@@ -335,7 +335,7 @@ export default function RecordPage() {
 
     return (
         <div className="p-4 max-w-lg mx-auto pb-24">
-            <h1 className="text-2xl font-bold mb-4">수업 기록</h1>
+            <h1 className="text-2xl font-bold mb-4">수업입력</h1>
 
             <div className="space-y-4">
                 <Card>
