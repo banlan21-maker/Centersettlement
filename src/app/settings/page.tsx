@@ -23,7 +23,11 @@ export default function SettingsPage() {
     const [teacherStudentSelections, setTeacherStudentSelections] = useState<Record<string, boolean>>({})
     const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null)
 
-    // ... (Vouchers State unchanged) ...
+    // Vouchers State
+    const [vouchers, setVouchers] = useState<any[]>([])
+    const [newVoucherName, setNewVoucherName] = useState('')
+    const [newVoucherSupport, setNewVoucherSupport] = useState('')
+    const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null)
 
     // Clients State
     const [clients, setClients] = useState<any[]>([])
@@ -34,9 +38,109 @@ export default function SettingsPage() {
     const [clientVoucherSelections, setClientVoucherSelections] = useState<Record<string, { selected: boolean, copay: string }>>({})
     const [editingClientId, setEditingClientId] = useState<string | null>(null)
 
-    // ... (Filter & Center Settings State unchanged) ...
+    // Client Filter State
+    const [clientSearchQuery, setClientSearchQuery] = useState('')
+    const [clientVoucherFilter, setClientVoucherFilter] = useState('all')
 
-    // ... (useEffect & fetchData unchanged) ...
+    // Center Settings State
+    const [centerSettings, setCenterSettings] = useState<any>({})
+    const [centerName, setCenterName] = useState('')
+    const [businessNumber, setBusinessNumber] = useState('')
+    const [repName, setRepName] = useState('')
+    const [phoneNumber, setPhoneNumber] = useState('')
+    const [baseFee, setBaseFee] = useState('55000')
+    const [extraFee, setExtraFee] = useState('10000')
+
+    useEffect(() => {
+        fetchData()
+    }, [])
+
+    // Filter Logic
+    useEffect(() => {
+        let result = clients
+
+        // 1. Name Search
+        if (clientSearchQuery) {
+            result = result.filter(c => c.name.includes(clientSearchQuery))
+        }
+
+        // 2. Voucher Filter
+        if (clientVoucherFilter && clientVoucherFilter !== 'all') {
+            result = result.filter(c =>
+                c.client_vouchers && c.client_vouchers.some((cv: any) => cv.voucher_id === clientVoucherFilter)
+            )
+        }
+
+        setFilteredClients(result)
+    }, [clients, clientSearchQuery, clientVoucherFilter])
+
+    const fetchData = async () => {
+        try {
+            const { data: t } = await supabase.from('teachers').select('*').order('created_at', { ascending: false })
+            if (t) setTeachers(t)
+
+            const { data: v } = await supabase.from('vouchers').select('*').order('created_at', { ascending: false })
+            if (v) {
+                setVouchers(v)
+                // Initialize selections only if not editing currently to avoid overwrite
+                if (!editingClientId) {
+                    const initialSelections: Record<string, { selected: boolean, copay: string }> = {}
+                    v.forEach(voucher => {
+                        initialSelections[voucher.id] = { selected: false, copay: '0' }
+                    })
+                    setClientVoucherSelections(initialSelections)
+                }
+            }
+
+            const { data: c } = await supabase.from('clients').select('*, client_vouchers(voucher_id, copay, vouchers(name))').order('created_at', { ascending: false })
+            if (c) {
+                setClients(c)
+                setFilteredClients(c)
+            }
+
+            // Fetch Center Settings
+            const { data: cs } = await supabase.from('center_settings').select('*').single()
+            if (cs) {
+                setCenterSettings(cs)
+                setCenterName(cs.center_name || '')
+                setBusinessNumber(cs.business_number || '')
+                setRepName(cs.representative_name || '')
+                setPhoneNumber(cs.phone_number || '')
+                setBaseFee(cs.base_fee?.toString() || '55000')
+                setExtraFee(cs.extra_fee_per_10min?.toString() || '10000')
+            }
+        } catch (e) {
+            console.error(e)
+        }
+    }
+
+    // --- Center Settings ---
+    const saveCenterSettings = async () => {
+        const payload = {
+            center_name: centerName,
+            business_number: businessNumber,
+            representative_name: repName,
+            phone_number: phoneNumber,
+            base_fee: parseInt(baseFee) || 0,
+            extra_fee_per_10min: parseInt(extraFee) || 0
+        }
+
+        if (centerSettings.id) {
+            // Update
+            const { error } = await supabase.from('center_settings').update(payload).eq('id', centerSettings.id)
+            if (error) toast.error('실패: ' + error.message)
+            else toast.success('센터 정보 저장 완료')
+        } else {
+            // Insert
+            const { error } = await supabase.from('center_settings').insert(payload)
+            if (error) toast.error('실패: ' + error.message)
+            else {
+                toast.success('센터 정보 저장 완료')
+                fetchData()
+            }
+        }
+    }
+
 
     // --- Teachers ---
     const addTeacher = async () => {
@@ -89,12 +193,110 @@ export default function SettingsPage() {
         setNewTeacherRate('')
     }
 
-    // ... (deleteTeacher, Assignment logic unchanged) ...
+    const deleteTeacher = async (id: string) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return
+        await supabase.from('teachers').delete().eq('id', id)
+        fetchData()
+    }
 
-    // ... (Voucher logic unchanged) ...
+    // ... (Assignment logic unchanged) ...
+    const openStudentManagement = async (teacherId: string) => {
+        setManagingTeacherId(teacherId)
+        const initialSelections: Record<string, boolean> = {}
+        clients.forEach(c => initialSelections[c.id] = false)
+        const { data: assignments } = await supabase.from('teacher_clients').select('client_id').eq('teacher_id', teacherId)
+        if (assignments) {
+            assignments.forEach((a: any) => initialSelections[a.client_id] = true)
+        }
+        setTeacherStudentSelections(initialSelections)
+    }
+
+    const saveTeacherStudents = async () => {
+        if (!managingTeacherId) return
+        const selectedClientIds = Object.entries(teacherStudentSelections)
+            .filter(([_, selected]) => selected)
+            .map(([clientId]) => clientId)
+        await supabase.from('teacher_clients').delete().eq('teacher_id', managingTeacherId)
+        if (selectedClientIds.length > 0) {
+            const toInsert = selectedClientIds.map(clientId => ({
+                teacher_id: managingTeacherId,
+                client_id: clientId
+            }))
+            const { error } = await supabase.from('teacher_clients').insert(toInsert)
+            if (error) toast.error('저장 실패: ' + error.message)
+            else toast.success('담당 학생 저장 완료')
+        } else {
+            toast.success('담당 학생 저장 완료 (없음)')
+        }
+        setManagingTeacherId(null)
+    }
+
+
+    // --- Vouchers ---
+    const addVoucher = async () => {
+        if (!newVoucherName) return
+        const { error } = await supabase.from('vouchers').insert({
+            name: newVoucherName,
+            support_amount: parseInt(newVoucherSupport) || 0,
+            client_copay: 0
+        })
+        if (error) toast.error('실패: ' + error.message)
+        else {
+            toast.success('바우처 추가 완료')
+            resetVoucherForm()
+            fetchData()
+        }
+    }
+
+    const updateVoucher = async () => {
+        if (!editingVoucherId || !newVoucherName) return
+        const { error } = await supabase.from('vouchers').update({
+            name: newVoucherName,
+            support_amount: parseInt(newVoucherSupport) || 0
+        }).eq('id', editingVoucherId)
+
+        if (error) toast.error('수정 실패: ' + error.message)
+        else {
+            toast.success('바우처 정보 수정 완료')
+            resetVoucherForm()
+            fetchData()
+        }
+    }
+
+    const startEditVoucher = (v: any) => {
+        setEditingVoucherId(v.id)
+        setNewVoucherName(v.name)
+        setNewVoucherSupport(v.support_amount?.toString() || '')
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    const resetVoucherForm = () => {
+        setEditingVoucherId(null)
+        setNewVoucherName('')
+        setNewVoucherSupport('')
+    }
+
+    const deleteVoucher = async (id: string) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return
+        await supabase.from('vouchers').delete().eq('id', id)
+        fetchData()
+    }
+
 
     // --- Clients ---
-    // ... (handleVoucherCheck unchanged) ...
+    const handleVoucherCheck = (voucherId: string, checked: boolean) => {
+        setClientVoucherSelections(prev => ({
+            ...prev,
+            [voucherId]: { ...prev[voucherId], selected: checked }
+        }))
+    }
+
+    const handleVoucherCopayChange = (voucherId: string, value: string) => {
+        setClientVoucherSelections(prev => ({
+            ...prev,
+            [voucherId]: { ...prev[voucherId], copay: value }
+        }))
+    }
 
     const addClient = async () => {
         if (!newClientName) return
@@ -139,7 +341,20 @@ export default function SettingsPage() {
         fetchData()
     }
 
-    // ... (saveClientVouchers unchanged) ...
+    const saveClientVouchers = async (clientId: string) => {
+        const vouchersToInsert = Object.entries(clientVoucherSelections)
+            .filter(([_, val]) => val.selected)
+            .map(([voucherId, val]) => ({
+                client_id: clientId,
+                voucher_id: voucherId,
+                copay: parseInt(val.copay) || 0
+            }))
+
+        if (vouchersToInsert.length > 0) {
+            const { error: voucherError } = await supabase.from('client_vouchers').insert(vouchersToInsert)
+            if (voucherError) toast.error('바우처 저장 실패: ' + voucherError.message)
+        }
+    }
 
     const startEditClient = (c: any) => {
         setEditingClientId(c.id)
@@ -174,12 +389,15 @@ export default function SettingsPage() {
         setClientVoucherSelections(initialSelections)
     }
 
-    // ... (deleteClient unchanged) ...
-
+    const deleteClient = async (id: string) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return
+        await supabase.from('clients').delete().eq('id', id)
+        fetchData()
+    }
 
     return (
         <div className="p-4 pb-24 space-y-4">
-            {/* ... (Center Tab unchanged) ... */}
+            <h1 className="text-2xl font-bold mb-4">기초 설정</h1>
 
             <Tabs defaultValue="center">
                 <TabsList className="w-full">
@@ -189,13 +407,8 @@ export default function SettingsPage() {
                     <TabsTrigger value="clients">내담자</TabsTrigger>
                 </TabsList>
 
+                {/* Center Settings Tab */}
                 <TabsContent value="center" className="space-y-4">
-                    {/* ... (Center Content unchanged - copied manually to be safe or assuming merge) ... */}
-                    {/* Actually, I am replacing the whole logical block above, but for the JSX part, I need to look at line numbers carefully. */}
-                    {/* The `ReplacementContent` above covers logic. I will split this into two `replace_file_content` calls safely. */}
-                    {/* WAIT: The instruction says "Update UI to inputs". I should do logic AND UI. */}
-                    {/* The previous block was too big for one go if I want to be safe with line numbers. */}
-                    {/* I'll restart the replacement to be safer - separating State/Logic update from Render update. */}
                     <Card>
                         <CardHeader>
                             <CardTitle>센터 기본 정보</CardTitle>
@@ -283,7 +496,7 @@ export default function SettingsPage() {
                         ))}
                     </div>
 
-                    {/* Teacher-Student Assignment Modal (unchanged) */}
+                    {/* Teacher-Student Assignment Modal/Area */}
                     {managingTeacherId && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
                             <Card className="w-full max-w-md max-h-[80vh] overflow-y-auto">
@@ -317,7 +530,7 @@ export default function SettingsPage() {
                     )}
                 </TabsContent>
 
-                {/* Vouchers Tab (unchanged) */}
+                {/* Vouchers Tab */}
                 <TabsContent value="vouchers" className="space-y-4">
                     <Card className={editingVoucherId ? "border-primary" : ""}>
                         <CardHeader className="pb-3 flex flex-row items-center justify-between">
@@ -460,3 +673,7 @@ export default function SettingsPage() {
                         )}
                     </div>
                 </TabsContent>
+            </Tabs>
+        </div>
+    )
+}
