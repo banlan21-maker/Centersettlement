@@ -19,13 +19,17 @@ export default function ReportPage() {
     const [loading, setLoading] = useState(true)
 
     // View State
-    const [viewMode, setViewMode] = useState<ViewMode>('monthly')
-    const [currentDate, setCurrentDate] = useState(new Date())
+    const [searchTerm, setSearchTerm] = useState('')
+    const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null)
+    const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
 
     useEffect(() => {
         fetchData()
     }, [])
 
+    // ... useEffect ...
+
+    // Same fetchData ...
     const fetchData = async () => {
         setLoading(true)
         const { data } = await supabase
@@ -46,44 +50,36 @@ export default function ReportPage() {
 
     const handleReset = async () => {
         if (!confirm('경고: 모든 정산 내역이 영구적으로 삭제됩니다. 계속하시겠습니까?')) return
-
-        const { error } = await supabase.from('sessions').delete().neq('id', '00000000-0000-0000-0000-000000000000') // Delete all hack
-
-        if (error) {
-            toast.error('초기화 실패: ' + error.message)
-        } else {
-            toast.success('모든 정산 내역이 초기화되었습니다.')
+        const { error } = await supabase.from('sessions').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+        if (error) toast.error('초기화 실패: ' + error.message)
+        else {
+            toast.success('초기화 완료')
             fetchData()
         }
     }
 
-    // Calculations helper
     const calculateRow = (s: any) => {
         const totalRevenue = (s.total_support || 0) + (s.final_client_cost || 0)
         const rate = s.teachers?.commission_rate || 0
         const teacherPay = Math.floor(totalRevenue * (rate / 100))
         const centerRevenue = totalRevenue - teacherPay
         const clientCost = s.final_client_cost || 0
-
         return { totalRevenue, teacherPay, centerRevenue, clientCost }
     }
 
-    // Filter Logic
-    const getFilteredSessions = () => {
+    // 1. Date Filter
+    const getDateFilteredSessions = () => {
         let start, end
-
         if (viewMode === 'daily') {
             start = currentDate
             end = currentDate
         } else if (viewMode === 'weekly') {
-            start = startOfWeek(currentDate, { weekStartsOn: 1 }) // Monday start
+            start = startOfWeek(currentDate, { weekStartsOn: 1 })
             end = endOfWeek(currentDate, { weekStartsOn: 1 })
         } else {
             start = startOfMonth(currentDate)
             end = endOfMonth(currentDate)
         }
-
-        // Reset time part for comparison
         start.setHours(0, 0, 0, 0)
         end.setHours(23, 59, 59, 999)
 
@@ -93,10 +89,27 @@ export default function ReportPage() {
         })
     }
 
-    const filteredSessions = getFilteredSessions()
+    const dateFilteredSessions = getDateFilteredSessions()
 
-    // Aggregations
-    const summary = filteredSessions.reduce((acc, s) => {
+    // 2. Search Filter (Global for Session List, Specific for other tabs)
+    const matchSearch = (s: any) => {
+        if (!searchTerm) return true
+        const query = searchTerm.toLowerCase()
+        const clientName = s.clients?.name?.toLowerCase() || ''
+        const teacherName = s.teachers?.name?.toLowerCase() || ''
+        const voucherNames = s.session_vouchers?.map((sv: any) => sv.vouchers?.name).join(' ').toLowerCase() || ''
+
+        return clientName.includes(query) || teacherName.includes(query) || voucherNames.includes(query)
+    }
+
+    // List Logic
+    const sessionListDisplay = dateFilteredSessions.filter(matchSearch)
+
+    // Aggr Logic (Based on DATE ONLY? Or Filtered? Usually Date Only for summary cards, but let's stick to consistent view)
+    // Actually, summary cards usually reflect "What's in the period", not "What I searched". 
+    // BUT the tabs will reflect search. 
+    // Let's keep summary cards based on `dateFilteredSessions` (Period Full Data) so metrics don't jump around when searching for a specific person.
+    const summary = dateFilteredSessions.reduce((acc, s) => {
         const { totalRevenue, teacherPay, centerRevenue, clientCost } = calculateRow(s)
         return {
             revenue: acc.revenue + totalRevenue,
@@ -106,8 +119,8 @@ export default function ReportPage() {
         }
     }, { revenue: 0, clientCost: 0, teacherPay: 0, centerRevenue: 0 })
 
-    // Group by Teacher
-    const teacherSettlement = Object.values(filteredSessions.reduce((acc: any, s) => {
+    // Teacher Grouping
+    const teacherMap = dateFilteredSessions.reduce((acc: any, s) => {
         const { teacherPay, totalRevenue } = calculateRow(s)
         const teacherId = s.teacher_id
         if (!acc[teacherId]) {
@@ -117,17 +130,19 @@ export default function ReportPage() {
                 rate: s.teachers?.commission_rate,
                 totalPay: 0,
                 totalRevenueGenerated: 0,
-                sessionCount: 0
+                sessionCount: 0,
+                sessions: [] // Keep track for details
             }
         }
         acc[teacherId].totalPay += teacherPay
         acc[teacherId].totalRevenueGenerated += totalRevenue
         acc[teacherId].sessionCount += 1
+        acc[teacherId].sessions.push(s)
         return acc
-    }, {}))
+    }, {})
 
-    // Group by Client
-    const clientBilling = Object.values(filteredSessions.reduce((acc: any, s) => {
+    // Client Grouping
+    const clientMap = dateFilteredSessions.reduce((acc: any, s) => {
         const { clientCost } = calculateRow(s)
         const clientId = s.client_id
         if (!acc[clientId]) {
@@ -135,13 +150,19 @@ export default function ReportPage() {
                 id: clientId,
                 name: s.clients?.name || 'Unknown',
                 totalCopay: 0,
-                sessionCount: 0
+                sessionCount: 0,
+                sessions: []
             }
         }
         acc[clientId].totalCopay += clientCost
         acc[clientId].sessionCount += 1
+        acc[clientId].sessions.push(s)
         return acc
-    }, {}))
+    }, {})
+
+    // Filter Grouped Results by Search Term (Name only usually)
+    const teacherSettlement = Object.values(teacherMap).filter((t: any) => !searchTerm || t.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    const clientBilling = Object.values(clientMap).filter((c: any) => !searchTerm || c.name.toLowerCase().includes(searchTerm.toLowerCase()))
 
 
     // Navigation Handlers
@@ -150,13 +171,11 @@ export default function ReportPage() {
         else if (viewMode === 'weekly') setCurrentDate(d => subWeeks(d, 1))
         else setCurrentDate(d => subMonths(d, 1))
     }
-
     const goNext = () => {
         if (viewMode === 'daily') setCurrentDate(d => addDays(d, 1))
         else if (viewMode === 'weekly') setCurrentDate(d => addWeeks(d, 1))
         else setCurrentDate(d => addMonths(d, 1))
     }
-
     const formatDateRange = () => {
         if (viewMode === 'daily') return format(currentDate, 'yyyy년 MM월 dd일 (eee)', { locale: ko })
         else if (viewMode === 'weekly') {
@@ -166,6 +185,10 @@ export default function ReportPage() {
         }
         else return format(currentDate, 'yyyy년 MM월', { locale: ko })
     }
+
+    // Detail Data Helpers
+    const selectedTeacherData = selectedTeacherId ? (teacherMap as any)[selectedTeacherId] : null
+    const selectedClientData = selectedClientId ? (clientMap as any)[selectedClientId] : null
 
     return (
         <div className="p-4 pb-24 space-y-4">
@@ -188,24 +211,9 @@ export default function ReportPage() {
                 {/* Controls */}
                 <div className="flex flex-col md:flex-row justify-between items-center bg-white p-3 rounded-lg border gap-4">
                     <div className="flex bg-slate-100 p-1 rounded-md">
-                        <button
-                            onClick={() => setViewMode('daily')}
-                            className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'daily' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}
-                        >
-                            일간
-                        </button>
-                        <button
-                            onClick={() => setViewMode('weekly')}
-                            className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}
-                        >
-                            주간
-                        </button>
-                        <button
-                            onClick={() => setViewMode('monthly')}
-                            className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'monthly' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}
-                        >
-                            월간
-                        </button>
+                        <button onClick={() => setViewMode('daily')} className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'daily' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}>일간</button>
+                        <button onClick={() => setViewMode('weekly')} className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}>주간</button>
+                        <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 text-sm rounded-sm transition-all ${viewMode === 'monthly' ? 'bg-white shadow text-black font-medium' : 'text-gray-500'}`}>월간</button>
                     </div>
 
                     <div className="flex items-center gap-4">
@@ -216,40 +224,35 @@ export default function ReportPage() {
                 </div>
             </div>
 
-            {/* Overview Cards */}
+            {/* Overview Cards (Based on Full Period Data) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <Card>
-                    <CardHeader className="p-4 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">총 매출</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                        <div className="text-lg font-bold">{summary.revenue.toLocaleString()}원</div>
-                    </CardContent>
+                    <CardHeader className="p-4 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">총 매출</CardTitle></CardHeader>
+                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold">{summary.revenue.toLocaleString()}원</div></CardContent>
                 </Card>
                 <Card>
-                    <CardHeader className="p-4 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">센터 순수익</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                        <div className="text-lg font-bold text-blue-600">{summary.centerRevenue.toLocaleString()}원</div>
-                    </CardContent>
+                    <CardHeader className="p-4 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">센터 순수익</CardTitle></CardHeader>
+                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold text-blue-600">{summary.centerRevenue.toLocaleString()}원</div></CardContent>
                 </Card>
                 <Card>
-                    <CardHeader className="p-4 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">선생님 지급액</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                        <div className="text-lg font-bold text-orange-600">{summary.teacherPay.toLocaleString()}원</div>
-                    </CardContent>
+                    <CardHeader className="p-4 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">선생님 지급액</CardTitle></CardHeader>
+                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold text-orange-600">{summary.teacherPay.toLocaleString()}원</div></CardContent>
                 </Card>
                 <Card>
-                    <CardHeader className="p-4 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">내담자 청구액</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                        <div className="text-lg font-bold">{summary.clientCost.toLocaleString()}원</div>
-                    </CardContent>
+                    <CardHeader className="p-4 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">내담자 청구액</CardTitle></CardHeader>
+                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold">{summary.clientCost.toLocaleString()}원</div></CardContent>
                 </Card>
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
+                <Input
+                    placeholder="이름, 바우처 등으로 검색..."
+                    className="pl-9 bg-white"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
             </div>
 
             {/* Main Content Tabs */}
@@ -260,11 +263,10 @@ export default function ReportPage() {
                     <TabsTrigger value="client">내담자 청구</TabsTrigger>
                 </TabsList>
 
-                {/* 1. Session List Tab */}
                 <TabsContent value="list">
                     <Card>
                         <CardHeader>
-                            <CardTitle className="text-lg">수업 내역 ({filteredSessions.length}건)</CardTitle>
+                            <CardTitle className="text-lg">수업 내역 ({sessionListDisplay.length}건)</CardTitle>
                         </CardHeader>
                         <CardContent className="p-0 overflow-x-auto">
                             <Table>
@@ -280,17 +282,17 @@ export default function ReportPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {filteredSessions.map(s => {
+                                    {sessionListDisplay.map(s => {
                                         const stats = calculateRow(s)
                                         return (
                                             <TableRow key={s.id}>
                                                 <TableCell className="align-top">
-                                                    <div className="font-medium text-xs">{s.date}</div>
+                                                    <div className="font-medium text-xs">{s.date.split(' ')[0]}</div>
                                                     <div className="text-[10px] text-gray-500">{s.duration_minutes}분</div>
                                                 </TableCell>
                                                 <TableCell className="align-top">
                                                     <div className="font-medium text-sm">{s.clients?.name || 'Unknown'}</div>
-                                                    <div className="text-xs text-gray-500">{s.teachers?.name || 'Unknown'} ({s.teachers?.commission_rate || 0}%)</div>
+                                                    <div className="text-xs text-gray-500">{s.teachers?.name || 'Unknown'}</div>
                                                 </TableCell>
                                                 <TableCell className="align-top">
                                                     <div className="flex flex-col gap-1">
@@ -305,27 +307,15 @@ export default function ReportPage() {
                                                         )}
                                                     </div>
                                                 </TableCell>
-                                                <TableCell className="text-right align-top font-medium text-sm">
-                                                    {stats.totalRevenue.toLocaleString()}
-                                                </TableCell>
-                                                <TableCell className="text-right align-top text-orange-600 text-sm">
-                                                    {stats.teacherPay.toLocaleString()}
-                                                </TableCell>
-                                                <TableCell className="text-right align-top text-blue-600 text-sm">
-                                                    {stats.centerRevenue.toLocaleString()}
-                                                </TableCell>
-                                                <TableCell className="text-right align-top font-bold text-sm">
-                                                    {stats.clientCost.toLocaleString()}
-                                                </TableCell>
+                                                <TableCell className="text-right align-top font-medium text-sm">{stats.totalRevenue.toLocaleString()}</TableCell>
+                                                <TableCell className="text-right align-top text-orange-600 text-sm">{stats.teacherPay.toLocaleString()}</TableCell>
+                                                <TableCell className="text-right align-top text-blue-600 text-sm">{stats.centerRevenue.toLocaleString()}</TableCell>
+                                                <TableCell className="text-right align-top font-bold text-sm">{stats.clientCost.toLocaleString()}</TableCell>
                                             </TableRow>
                                         )
                                     })}
-                                    {filteredSessions.length === 0 && (
-                                        <TableRow>
-                                            <TableCell colSpan={7} className="text-center py-8 text-gray-500">
-                                                해당 기간 내 기록이 없습니다.
-                                            </TableCell>
-                                        </TableRow>
+                                    {sessionListDisplay.length === 0 && (
+                                        <TableRow><TableCell colSpan={7} className="text-center py-8 text-gray-500">검색 결과가 없습니다.</TableCell></TableRow>
                                     )}
                                 </TableBody>
                             </Table>
@@ -333,7 +323,6 @@ export default function ReportPage() {
                     </Card>
                 </TabsContent>
 
-                {/* 2. Teacher Settlement Tab */}
                 <TabsContent value="teacher">
                     <Card>
                         <CardHeader>
@@ -347,24 +336,24 @@ export default function ReportPage() {
                                         <TableHead className="text-right">수업 횟수</TableHead>
                                         <TableHead className="text-right">총 매출 기여</TableHead>
                                         <TableHead className="text-right font-bold text-orange-600">지급해야 할 금액</TableHead>
+                                        <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {teacherSettlement.map((t: any) => (
-                                        <TableRow key={t.id}>
+                                        <TableRow key={t.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSelectedTeacherId(t.id)}>
                                             <TableCell>
-                                                <div className="font-medium">{t.name}</div>
+                                                <div className="font-medium underline decoration-dotted underline-offset-4">{t.name}</div>
                                                 <div className="text-xs text-gray-500">비율: {t.rate}%</div>
                                             </TableCell>
                                             <TableCell className="text-right">{t.sessionCount}회</TableCell>
                                             <TableCell className="text-right text-gray-500">{t.totalRevenueGenerated.toLocaleString()}원</TableCell>
                                             <TableCell className="text-right font-bold text-orange-600 text-lg">{t.totalPay.toLocaleString()}원</TableCell>
+                                            <TableCell><ChevronRight className="w-4 h-4 text-gray-400" /></TableCell>
                                         </TableRow>
                                     ))}
                                     {teacherSettlement.length === 0 && (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="text-center py-8 text-gray-500">내역이 없습니다.</TableCell>
-                                        </TableRow>
+                                        <TableRow><TableCell colSpan={5} className="text-center py-8 text-gray-500">검색 결과가 없습니다.</TableCell></TableRow>
                                     )}
                                 </TableBody>
                             </Table>
@@ -372,7 +361,6 @@ export default function ReportPage() {
                     </Card>
                 </TabsContent>
 
-                {/* 3. Client Billing Tab */}
                 <TabsContent value="client">
                     <Card>
                         <CardHeader>
@@ -385,20 +373,20 @@ export default function ReportPage() {
                                         <TableHead>내담자</TableHead>
                                         <TableHead className="text-right">수업 횟수</TableHead>
                                         <TableHead className="text-right font-bold">청구할 금액 (본인부담)</TableHead>
+                                        <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {clientBilling.map((c: any) => (
-                                        <TableRow key={c.id}>
-                                            <TableCell className="font-medium">{c.name}</TableCell>
+                                        <TableRow key={c.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSelectedClientId(c.id)}>
+                                            <TableCell className="font-medium underline decoration-dotted underline-offset-4">{c.name}</TableCell>
                                             <TableCell className="text-right">{c.sessionCount}회</TableCell>
                                             <TableCell className="text-right font-bold text-lg">{c.totalCopay.toLocaleString()}원</TableCell>
+                                            <TableCell><ChevronRight className="w-4 h-4 text-gray-400" /></TableCell>
                                         </TableRow>
                                     ))}
                                     {clientBilling.length === 0 && (
-                                        <TableRow>
-                                            <TableCell colSpan={3} className="text-center py-8 text-gray-500">내역이 없습니다.</TableCell>
-                                        </TableRow>
+                                        <TableRow><TableCell colSpan={4} className="text-center py-8 text-gray-500">검색 결과가 없습니다.</TableCell></TableRow>
                                     )}
                                 </TableBody>
                             </Table>
@@ -406,6 +394,96 @@ export default function ReportPage() {
                     </Card>
                 </TabsContent>
             </Tabs>
+
+            {/* Teacher Detail Modal */}
+            {selectedTeacherData && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setSelectedTeacherId(null)}>
+                    <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                        <CardHeader className="border-b">
+                            <div className="flex justify-between items-center">
+                                <CardTitle>{selectedTeacherData.name} 선생님 상세 내역 ({formatDateRange()})</CardTitle>
+                                <Button variant="ghost" size="icon" onClick={() => setSelectedTeacherId(null)}><X className="w-5 h-5" /></Button>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-0 overflow-y-auto flex-1">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>날짜</TableHead>
+                                        <TableHead>내담자</TableHead>
+                                        <TableHead>수업내용</TableHead>
+                                        <TableHead className="text-right text-orange-600">지급액</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {selectedTeacherData.sessions.map((s: any) => {
+                                        const { teacherPay } = calculateRow(s)
+                                        return (
+                                            <TableRow key={s.id}>
+                                                <TableCell className="text-sm">{s.date.split(' ')[0]} <br /><span className="text-xs text-gray-400">{s.date.split(' ')[1]?.slice(0, 5)}</span></TableCell>
+                                                <TableCell>{s.clients?.name}</TableCell>
+                                                <TableCell className="text-xs text-gray-500">
+                                                    {s.session_vouchers?.map((v: any) => v.vouchers?.name).join(', ') || '일반'} ({s.duration_minutes}분)
+                                                </TableCell>
+                                                <TableCell className="text-right font-bold text-orange-600">{teacherPay.toLocaleString()}</TableCell>
+                                            </TableRow>
+                                        )
+                                    })}
+                                    <TableRow className="bg-orange-50 font-bold">
+                                        <TableCell colSpan={3} className="text-right">합계</TableCell>
+                                        <TableCell className="text-right text-orange-700 text-lg">{selectedTeacherData.totalPay.toLocaleString()}</TableCell>
+                                    </TableRow>
+                                </TableBody>
+                            </Table>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* Client Detail Modal */}
+            {selectedClientData && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setSelectedClientId(null)}>
+                    <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                        <CardHeader className="border-b">
+                            <div className="flex justify-between items-center">
+                                <CardTitle>{selectedClientData.name}님 청구 상세 내역 ({formatDateRange()})</CardTitle>
+                                <Button variant="ghost" size="icon" onClick={() => setSelectedClientId(null)}><X className="w-5 h-5" /></Button>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-0 overflow-y-auto flex-1">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>날짜</TableHead>
+                                        <TableHead>선생님</TableHead>
+                                        <TableHead>수업내용</TableHead>
+                                        <TableHead className="text-right">본인부담금</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {selectedClientData.sessions.map((s: any) => {
+                                        const { clientCost } = calculateRow(s)
+                                        return (
+                                            <TableRow key={s.id}>
+                                                <TableCell className="text-sm">{s.date.split(' ')[0]} <br /><span className="text-xs text-gray-400">{s.date.split(' ')[1]?.slice(0, 5)}</span></TableCell>
+                                                <TableCell>{s.teachers?.name}</TableCell>
+                                                <TableCell className="text-xs text-gray-500">
+                                                    {s.session_vouchers?.map((v: any) => v.vouchers?.name).join(', ') || '일반'} ({s.duration_minutes}분)
+                                                </TableCell>
+                                                <TableCell className="text-right font-bold">{clientCost.toLocaleString()}</TableCell>
+                                            </TableRow>
+                                        )
+                                    })}
+                                    <TableRow className="bg-slate-50 font-bold">
+                                        <TableCell colSpan={3} className="text-right">합계</TableCell>
+                                        <TableCell className="text-right text-lg">{selectedClientData.totalCopay.toLocaleString()}</TableCell>
+                                    </TableRow>
+                                </TableBody>
+                            </Table>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
         </div>
     )
 }
