@@ -120,102 +120,185 @@ export default function RecordPage() {
         const baseFee = centerSettings.base_fee || 55000
         const extraFeeUnit = centerSettings.extra_fee_per_10min || 10000
 
-        // 1. Calculate Total Fee (Time based)
+        // 1. Calculate Time-Based Fee adjustment (if any)
+        // User said "Use Center Base Fee (55000)" for multi.
+        // But for time extension? "추가 수업료" logic usually applies to Base Fee.
+        // Let's assume the "Base Fee" used for Multi includes time extensions if applicable.
         const durationMin = parseInt(duration) || 0
-        let totalFee = baseFee
+        let timeAdjustedBaseFee = baseFee
         if (durationMin > 40) {
             const extraTime = durationMin - 40
             const extraUnits = Math.ceil(extraTime / 10)
-            totalFee += (extraUnits * extraFeeUnit)
+            timeAdjustedBaseFee += (extraUnits * extraFeeUnit)
         }
 
         const breakdown: string[] = []
-        breakdown.push(`기본 수업료: ${baseFee.toLocaleString()}원`)
-        if (durationMin > 40) breakdown.push(`추가 수업료: +${(totalFee - baseFee).toLocaleString()}원 (${durationMin - 40}분)`)
-        breakdown.push(`총 수업료: ${totalFee.toLocaleString()}원`)
 
-        let feeRemaining = totalFee
-        let totalSupport = 0
-        let totalFixedCopay = 0
+        let sessionFee = 0
+        let isMulti = selectedVouchers.length > 1
 
-        // Track specific usage per voucher to save later
+        // 2. Determine Session Fee Logic
+        if (isMulti) {
+            sessionFee = timeAdjustedBaseFee
+            breakdown.push(`[복합결제] 센터 기본 수업료 적용: ${sessionFee.toLocaleString()}원`)
+        } else if (selectedVouchers.length === 1) {
+            const vid = selectedVouchers[0]
+            const voucher = vouchers.find(v => v.id === vid)
+            const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
+
+            const voucherFee = (voucher?.default_fee && voucher.default_fee > 0) ? voucher.default_fee : baseFee
+            const copay = clientVoucher?.copay || 0
+
+            // Single Mode: Fee is Voucher's Session Fee + Copay
+            sessionFee = voucherFee + copay
+            breakdown.push(`[단일결제] ${voucher?.name}`)
+            breakdown.push(`- 바우처 기준 수가: ${voucherFee.toLocaleString()}원`)
+            breakdown.push(`- 고정 본인부담금: ${copay.toLocaleString()}원`)
+            breakdown.push(`= 1회 총 수업비: ${sessionFee.toLocaleString()}원`)
+        } else {
+            // No voucher
+            sessionFee = timeAdjustedBaseFee
+            breakdown.push(`[일반결제] 센터 기본 수업료: ${sessionFee.toLocaleString()}원`)
+        }
+
+        if (durationMin > 40 && !isMulti && selectedVouchers.length === 0) {
+            breakdown.push(`(추가 시간 비용 포함됨)`)
+        }
+
+
+        // 3. Calculate Deduction & Client Cost
+        let feeRemaining = sessionFee
+        let totalDeducted = 0
         const voucherUsageMap: Record<string, number> = {}
 
-        // 2. Multi-Voucher Logic
         if (selectedVouchers.length > 0) {
-            // Fetch session history for limit check for ALL selected vouchers
+            // Fetch usage for limits
             const startOfMonth = new Date(date)
             startOfMonth.setDate(1)
             const startStr = format(startOfMonth, 'yyyy-MM-dd')
-            // End of month
             const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
             const endStr = format(endOfMonth, 'yyyy-MM-dd')
 
+            // Fetch usage in parallel
+            const usages = await Promise.all(selectedVouchers.map(async vid => {
+                const { data } = await supabase
+                    .from('session_vouchers')
+                    .select('used_amount, sessions!inner(date, client_id)')
+                    .eq('voucher_id', vid)
+                    .eq('sessions.client_id', selectedClient)
+                    .gte('sessions.date', startStr)
+                    .lte('sessions.date', endStr)
+                const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
+                return { vid, used }
+            }))
+
             for (const vid of selectedVouchers) {
+                if (feeRemaining <= 0) break // Covered
+
                 const voucher = vouchers.find(v => v.id === vid)
-                const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
+                const usageInfo = usages.find(u => u.vid === vid)
+                const usedAmount = usageInfo?.used || 0
+                const limit = voucher?.support_amount || 0
 
-                if (voucher && clientVoucher) {
-                    const limit = voucher.support_amount || 0
-                    const fixedCopay = clientVoucher.copay || 0
+                const remainingLimit = Math.max(0, limit - usedAmount)
 
-                    // Fetch actual usage from session_vouchers table
-                    const { data: usageData } = await supabase
-                        .from('session_vouchers')
-                        .select('used_amount, sessions!inner(date, client_id)')
-                        .eq('voucher_id', vid)
-                        .eq('sessions.client_id', selectedClient)
-                        .gte('sessions.date', startStr)
-                        .lte('sessions.date', endStr)
+                // Deduct from this voucher
+                const deduction = Math.min(feeRemaining, remainingLimit)
 
-                    const usedAmount = usageData?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
-                    const remainingLimit = Math.max(0, limit - usedAmount)
+                voucherUsageMap[vid] = deduction
+                feeRemaining -= deduction
+                totalDeducted += deduction
 
-                    // Calculate support from this voucher
-                    // It covers remaining FEE up to its remaining LIMIT.
-                    const support = Math.min(feeRemaining, remainingLimit)
-
-                    feeRemaining -= support
-                    totalSupport += support
-
-                    // Fixed copay is added ONCE per voucher used? 
-                    // Usually yes, if you use a voucher you pay the copay associated with it.
-                    // But if support is 0 because limit is full, do you still pay copay?
-                    // Let's assume yes, if selected, it applies. But if support is 0, maybe not?
-                    // User said "1회 수업때 1개 이상의 바우처를 사용할수있음".
-                    // Let's stick to simple rule: If selected, it contributes support and copay.
-                    totalFixedCopay += fixedCopay
-
-                    voucherUsageMap[vid] = support
-
-                    breakdown.push(`--- ${voucher.name} ---`)
-                    breakdown.push(`월 한도: ${limit.toLocaleString()} / 이번 달 사용: ${usedAmount.toLocaleString()}`)
-                    breakdown.push(`잔여 한도: ${remainingLimit.toLocaleString()}`)
-                    breakdown.push(`지원금 적용: -${support.toLocaleString()}원`)
-                    breakdown.push(`고정 부담금: +${fixedCopay.toLocaleString()}원`)
-
-                    if (remainingLimit === 0) breakdown.push(`⚠️ 한도 소진됨`)
-                }
+                breakdown.push(`--- ${voucher?.name} ---`)
+                breakdown.push(`잔여 한도: ${remainingLimit.toLocaleString()} / 차감: -${deduction.toLocaleString()}`)
             }
+        }
+
+        // 4. Final Client Cost Calculation
+        let finalClientCost = 0
+        if (isMulti) {
+            // Multi: Client pays whatever is NOT covered by limits
+            finalClientCost = feeRemaining
+            breakdown.push(`----------------`)
+            breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
+            breakdown.push(`차액 (내담자 부담): ${finalClientCost.toLocaleString()}원`)
+        } else if (selectedVouchers.length === 1) {
+            // Single: Client pays Fixed Copay + Any Excess (if limit exceeded)
+            const vid = selectedVouchers[0]
+            const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
+            const fixedCopay = clientVoucher?.copay || 0
+
+            // Client pays Fixed Copay... PLUS any fee remaining?
+            // "1회 수업료 6만원 = 바우처 차감(Limit deduction) 6만원". 
+            // If Limit has space, deducted 60k. Client Cost = 10k (Fixed).
+            // If Limit has 0 space, deducted 0. Client Cost = 10k + 50k(uncovered)? or 60k?
+            // "한도 초과/미지원 차액" should be paid by client.
+            // If covered: Cost = Fixed Copay.
+            // If uncovered: Cost = Fixed Copay + Uncovered Amount.
+            // But wait, if Deducted 60k includes the Copay portion (as per user's 60k example), 
+            // then we shouldn't double charge.
+            // Actually, in the user's example:
+            // "1회당 6만원이 빠지는거지" (Deducted from Limit).
+            // "개인부담금 1만원".
+            // If the Limit tracks the Groos Value (Support + Copay), then the Voucher is basically a "Debit Card" loaded with Gross Limit.
+            // And the Client pays 10k cash *to the center*? Or is 10k just a calculated value?
+            // "내담자에게 돈을 더받던지.." -> Client pays cash.
+            // If 60k deducted from Voucher, and Client pays 10k Cash. The Center gets 60k + 10k = 70k? No.
+            // The 10k is likely "Copay" that is *part* of determining the 60k, but paid by client.
+            // IF Limit covers 60k, does the Voucher provider pay 60k?
+            // Usually Voucher pays (LimitDeduction - Copay).
+            // So if Deducted 60k, and Copay is 10k, Voucher pays 50k.
+            // Center revenue = 50k (Voucher) + 10k (Client) = 60k. Matches.
+            // So, Client Cost is ALWAYS `Fixed Copay`. (Plus excess if limit reached).
+            // But if Limit reached (Deducted 0), then Client pays Full 60k?
+            // Yes.
+            // So logic: ClientCost = FixedCopay + (SessionFee - Deducted - FixedCopay)? 
+            // No.
+            // If Deducted = 60k. ClientCost = 10k.
+            // If Deducted = 0. ClientCost = 60k.
+            // Formula: `ClientCost = SessionFee - (Deducted - FixedCopay)`? No.
+            // If D=60, C=10. S=60. 60 - (60-10) = 10. Correct.
+            // If D=0, C=10. S=60. 60 - (0 - 10)? No.
+            // Let's look at coverage.
+            // The "Voucher Support" part is what saves the client money.
+            // Real Voucher Support = Deducted Amount - Fixed Copay.
+            // (Assumes Deducted Amount always >= Fixed Copay. If not, only partial support).
+            // Client Pay = Session Fee - Real Voucher Support.
+            // = Session Fee - (Deducted - Fixed Copay) = Session Fee - Deducted + Fixed Copay.
+            // Example: S=60, D=60, F=10. Pay = 60 - 60 + 10 = 10. Correct.
+            // Example: S=60, D=0 (Empty). Pay = 60 - 0 + 10 = 70? No, should be 60.
+            // Why? Because if no voucher, fixed copay logic might not apply or applies differently.
+            // If Limit is 0, it's just a cash session.
+            // But if we treat it as "Voucher used but empty":
+            // Real Support from Voucher = Max(0, Deducted - Fixed Copay).
+            // If D=0, Support=0. Pay = 60 - 0 = 60. Correct.
+            // If D=40 (Partial), F=10. Support = 30. Pay = 60 - 30 = 30. Correct.
+            // (Deducted 40 means 30 Gov + 10 User? Or just 40 Gov?)
+            // User example: "60k deducted". This is "Gross".
+            // So implicit Gov portion is 50k.
+            // I will use: `Client Cost = Session Fee - Max(0, TotalDeducted - FixedCopay)`.
+            // Wait, this assumes the "Deduction" contains the fixed copay.
+            // Yes, user said "1회당 6만원(5+1)이 빠지는거지".
+
+            const realSupport = Math.max(0, totalDeducted - fixedCopay)
+            finalClientCost = sessionFee - realSupport
+
+            breakdown.push(`----------------`)
+            breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
+            breakdown.push(`(실질 바우처 지원: -${realSupport.toLocaleString()}원)`)
+            breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
+
         } else {
-            breakdown.push(`(바우처 미사용)`)
+            // General
+            finalClientCost = sessionFee
         }
-
-        // Final Client Cost = (Original Fee - Total Support) + Total Fixed Copays
-        // Essentially: FeeRemaining (which is Excess) + Total Fixed Copays
-        const finalClientCost = feeRemaining + totalFixedCopay
-
-        if (feeRemaining > 0 && selectedVouchers.length > 0) {
-            breakdown.push(`한도초과/미지원 차액: +${feeRemaining.toLocaleString()}원`)
-        }
-        breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
 
         setCalcResult({
-            totalFee,
-            voucherSupport: totalSupport,
+            totalFee: sessionFee,
+            voucherSupport: isMulti ? totalDeducted : Math.max(0, totalDeducted - (clientVouchers.find(cv => cv.voucher_id === selectedVouchers[0])?.copay || 0)),
             clientCost: finalClientCost,
             breakdown,
-            voucherUsageMap // Pass this to submit handler
+            voucherUsageMap
         })
     }
 

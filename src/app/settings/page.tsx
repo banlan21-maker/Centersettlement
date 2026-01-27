@@ -27,10 +27,111 @@ export default function SettingsPage() {
     const [vouchers, setVouchers] = useState<any[]>([])
     const [newVoucherName, setNewVoucherName] = useState('')
     const [newVoucherSupport, setNewVoucherSupport] = useState('')
+    const [newVoucherDefaultFee, setNewVoucherDefaultFee] = useState('')
     const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null)
 
     // Clients State
     const [clients, setClients] = useState<any[]>([])
+
+    // ... (Lines 34-235)
+
+    // --- Vouchers ---
+    const addVoucher = async () => {
+        if (!newVoucherName) return
+        const { error } = await supabase.from('vouchers').insert({
+            name: newVoucherName,
+            support_amount: parseInt(newVoucherSupport) || 0,
+            default_fee: parseInt(newVoucherDefaultFee) || 0,
+            client_copay: 0
+        })
+        if (error) toast.error('실패: ' + error.message)
+        else {
+            toast.success('바우처 추가 완료')
+            resetVoucherForm()
+            fetchData()
+        }
+    }
+
+    const updateVoucher = async () => {
+        if (!editingVoucherId || !newVoucherName) return
+        const { error } = await supabase.from('vouchers').update({
+            name: newVoucherName,
+            support_amount: parseInt(newVoucherSupport) || 0,
+            default_fee: parseInt(newVoucherDefaultFee) || 0
+        }).eq('id', editingVoucherId)
+
+        if (error) toast.error('수정 실패: ' + error.message)
+        else {
+            toast.success('바우처 정보 수정 완료')
+            resetVoucherForm()
+            fetchData()
+        }
+    }
+
+    const startEditVoucher = (v: any) => {
+        setEditingVoucherId(v.id)
+        setNewVoucherName(v.name)
+        setNewVoucherSupport(v.support_amount?.toString() || '')
+        setNewVoucherDefaultFee(v.default_fee?.toString() || '')
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    const resetVoucherForm = () => {
+        setEditingVoucherId(null)
+        setNewVoucherName('')
+        setNewVoucherSupport('')
+        setNewVoucherDefaultFee('')
+    }
+
+    const deleteVoucher = async (id: string) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return
+        await supabase.from('vouchers').delete().eq('id', id)
+        fetchData()
+    }
+
+    // (Lines 286-533 unchanged)
+
+    {/* Vouchers Tab */ }
+    <TabsContent value="vouchers" className="space-y-4">
+        <Card className={editingVoucherId ? "border-primary" : ""}>
+            <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                <CardTitle className="text-sm font-medium">{editingVoucherId ? '바우처 수정' : '새 바우처 등록'}</CardTitle>
+                {editingVoucherId && <Button variant="ghost" size="sm" onClick={resetVoucherForm}><X className="w-4 h-4 mr-1" />취소</Button>}
+            </CardHeader>
+            <CardContent className="space-y-2">
+                <Input placeholder="바우처명" value={newVoucherName} onChange={e => setNewVoucherName(e.target.value)} />
+                <Input placeholder="월 지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
+                <Input placeholder="1회 차감액(지원금 기준) (원)" type="number" value={newVoucherDefaultFee} onChange={e => setNewVoucherDefaultFee(e.target.value)} />
+                <Button onClick={editingVoucherId ? updateVoucher : addVoucher} className="w-full">
+                    {editingVoucherId ? '수정 완료' : '추가'}
+                </Button>
+            </CardContent>
+        </Card>
+
+        <div className="space-y-2">
+            {vouchers.map(v => (
+                <div key={v.id} className={`flex justify-between items-center p-3 bg-white rounded-lg border shadow-sm ${editingVoucherId === v.id ? 'border-primary bg-blue-50' : ''}`}>
+                    <div>
+                        <div className="font-medium">{v.name}</div>
+                        <div className="text-sm text-gray-500">
+                            월 {v.support_amount?.toLocaleString()}원
+                            <span className="ml-2 text-blue-600">
+                                (1회 {v.default_fee?.toLocaleString()}원 차감)
+                            </span>
+                        </div>
+                    </div>
+                    <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" onClick={() => startEditVoucher(v)}>
+                            <Pencil className="w-4 h-4 text-blue-500" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => deleteVoucher(v.id)}>
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                        </Button>
+                    </div>
+                </div>
+            ))}
+        </div>
+    </TabsContent>
     const [filteredClients, setFilteredClients] = useState<any[]>([]) // Displayed clients
     const [newClientName, setNewClientName] = useState('')
     const [newClientBirthDate, setNewClientBirthDate] = useState('')
@@ -232,55 +333,7 @@ export default function SettingsPage() {
     }
 
 
-    // --- Vouchers ---
-    const addVoucher = async () => {
-        if (!newVoucherName) return
-        const { error } = await supabase.from('vouchers').insert({
-            name: newVoucherName,
-            support_amount: parseInt(newVoucherSupport) || 0,
-            client_copay: 0
-        })
-        if (error) toast.error('실패: ' + error.message)
-        else {
-            toast.success('바우처 추가 완료')
-            resetVoucherForm()
-            fetchData()
-        }
-    }
 
-    const updateVoucher = async () => {
-        if (!editingVoucherId || !newVoucherName) return
-        const { error } = await supabase.from('vouchers').update({
-            name: newVoucherName,
-            support_amount: parseInt(newVoucherSupport) || 0
-        }).eq('id', editingVoucherId)
-
-        if (error) toast.error('수정 실패: ' + error.message)
-        else {
-            toast.success('바우처 정보 수정 완료')
-            resetVoucherForm()
-            fetchData()
-        }
-    }
-
-    const startEditVoucher = (v: any) => {
-        setEditingVoucherId(v.id)
-        setNewVoucherName(v.name)
-        setNewVoucherSupport(v.support_amount?.toString() || '')
-        window.scrollTo({ top: 0, behavior: 'smooth' })
-    }
-
-    const resetVoucherForm = () => {
-        setEditingVoucherId(null)
-        setNewVoucherName('')
-        setNewVoucherSupport('')
-    }
-
-    const deleteVoucher = async (id: string) => {
-        if (!confirm('정말 삭제하시겠습니까?')) return
-        await supabase.from('vouchers').delete().eq('id', id)
-        fetchData()
-    }
 
 
     // --- Clients ---
