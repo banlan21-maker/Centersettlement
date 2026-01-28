@@ -73,7 +73,7 @@ export default function Home() {
       </div>
 
       <div className="mt-8 text-center text-xs text-gray-400 space-y-1">
-        <p>v1.03</p>
+        <p>v1.04</p>
         <p>by.banlan</p>
       </div>
     </div>
