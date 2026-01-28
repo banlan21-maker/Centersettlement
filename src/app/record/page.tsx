@@ -42,6 +42,9 @@ function RecordContent() {
     const [startTime, setStartTime] = useState(qTime || '10:00')
     const [duration, setDuration] = useState(qDuration || '40')
 
+    // Session Count State
+    const [sessionCounts, setSessionCounts] = useState<Record<string, { current: number, total: number }>>({})
+
     // Calculation Results
     const [calcResult, setCalcResult] = useState<{
         totalFee: number,
@@ -143,7 +146,7 @@ function RecordContent() {
         const breakdown: string[] = []
 
         // Fetch usages early for logic
-        let usages: { vid: string, used: number }[] = []
+        let usages: { vid: string, used: number, count: number }[] = []
         if (selectedVouchers.length > 0) {
             const startOfMonth = new Date(date)
             startOfMonth.setDate(1)
@@ -160,7 +163,11 @@ function RecordContent() {
                     .gte('sessions.date', startStr)
                     .lte('sessions.date', endStr)
                 const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
-                return { vid, used }
+                // Count distinct sessions? data is from session_vouchers. Each row is one voucher usage for one session.
+                // But if we have multiple entries? Usually one per session.
+                // data.length is the count of sessions this voucher was used in this month.
+                const count = data?.length || 0
+                return { vid, used, count }
             }))
         }
 
@@ -351,316 +358,365 @@ function RecordContent() {
                 extraCost = extraUnits * extraFeeUnit
             }
 
-            // Deduct Base Fee from Limit
-            const remainingLimit = Math.max(0, limit - usedAmount)
-            const deduction = Math.min(baseSessionFee, remainingLimit)
+            // Session Count Check
+            const existingCount = usageInfo?.count || 0
+            const currentSessionNum = existingCount + 1
+            const isOverLimit = currentSessionNum > monthlyCount
 
-            totalDeducted = deduction // This is what we deduct from the Voucher (Total Pot)
-            voucherUsageMap[vid] = deduction
+            // Update UI State for counts
+            // We can't set state directly in calculateFee (infinite loop potential if not careful).
+            // But we can return it or use a ref. 
+            // Better: calculateFee returns the counts map and we set it.
+            // Or just update a local map and set it at the end if changed? 
+            // Let's rely on the breakdown or return value.
 
-            // Client Cost:
-            // 1. Uncovered Base Fee (if limit exceeded)
-            const uncoveredBase = baseSessionFee - deduction
-            // 2. Base Burden (if covered, we still pay Burden. If uncovered, we pay Full? 
-            // "Total" pot includes burden.
-            // If we deduct 50,000 from 200,000.
-            // Client pays 5,000.
-            // If 50,000 is fully deducted, it implies Gov pays 45k, Client 5k.
-            // The "Deduction" records the CONSUMPTION of the voucher.
+            if (isOverLimit) {
+                // Over Limit -> Standard Fee
+                sessionFee = timeAdjustedBaseFee
 
-            // Wait, if `deduction` (from param `used_amount` in session_vouchers) counts towards the limit.
-            // And User says "Deduct 50,000".
-            // We save `used_amount` = 50,000.
-            // And `final_client_cost`.
+                // Reset others
+                totalDeducted = 0
+                totalGovSupport = 0
+                finalClientCost = sessionFee
 
-            // What if limit is zero?
-            // Deduction = 0.
-            // Uncovered = 50,000.
-            // Client pays 50,000 + Extra.
+                breakdown.push(`[초과 수업] ${voucher?.name} (월 ${monthlyCount}회 초과)`)
+                breakdown.push(`- 현재 ${currentSessionNum}회차 수업입니다.`)
+                breakdown.push(`- 지원 한도 초과로 센터 기본수업료가 적용됩니다.`)
+                breakdown.push(`= 1회 최종 수업료: ${sessionFee.toLocaleString()}원 (전액 본인부담)`)
+            } else {
+                // Normal Logic
 
-            // What if limit exists?
-            // Deduction = 50,000.
-            // Client pays 5,000 + Extra. (Normally).
+                // Deduct Base Fee from Limit
+                const remainingLimit = Math.max(0, limit - usedAmount)
+                const deduction = Math.min(baseSessionFee, remainingLimit)
 
-            // So Client pays: `baseSessionBurden` + `uncoveredBase`? 
-            // If Uncovered = 0 (Fully covered): Client pays `baseSessionBurden`.
-            // If Uncovered = 50,000 (No limit): Client pays 50,000.
-            // -> Logic: Client Pay = `baseSessionBurden` + `(baseSessionFee - deduction - baseSessionBurden_portion_of_uncovered?)`
-            // No, simpler: 
-            // "Limit" (200k) includes "Burden" (20k).
-            // If we deduct 50k from Limit. Client pays 5k.
-            // This 5k is PART of the 50k deduction?
-            // "20000/4=5000 ... 본인 부담금이 쌓인다"
-            // Using "Total Limit" approach, the client pays the burden regardless.
-            // AND if the limit is exhausted, the client pays the *rest* of the fee.
+                totalDeducted = deduction // This is what we deduct from the Voucher (Total Pot)
+                voucherUsageMap[vid] = deduction
 
-            // Let's assume:
-            // Standard Client Cost = `baseSessionBurden` + `extraCost`.
-            // Shortfall = `baseSessionFee` - `deduction`.
-            // If Shortfall > 0 (Limit exceeded), Client pays Shortfall INSTEAD OF Coverage?
-            // No, Shortfall adds to cost.
+                // Client Cost:
+                // 1. Uncovered Base Fee (if limit exceeded)
+                const uncoveredBase = baseSessionFee - deduction
+                // 2. Base Burden (if covered, we still pay Burden. If uncovered, we pay Full? 
+                // "Total" pot includes burden.
+                // If we deduct 50,000 from 200,000.
+                // Client pays 5,000.
+                // If 50,000 is fully deducted, it implies Gov pays 45k, Client 5k.
+                // The "Deduction" records the CONSUMPTION of the voucher.
 
-            // Case 1: Covered. Deduction = 50k. Remaining Fee = 0.
-            // we want Client Cost = 5k.
+                // Wait, if `deduction` (from param `used_amount` in session_vouchers) counts towards the limit.
+                // And User says "Deduct 50,000".
+                // We save `used_amount` = 50,000.
+                // And `final_client_cost`.
 
-            // Case 2: Empty. Deduction = 0. Remaining Fee = 50k.
-            // We want Client Cost = 50k.
+                // What if limit is zero?
+                // Deduction = 0.
+                // Uncovered = 50,000.
+                // Client pays 50,000 + Extra.
 
-            // Formula: `finalClientCost` = `baseSessionBurden` + `(baseSessionFee - deduction)` + `extraCost`?
-            // Test Case 1: 5k + (50k - 50k) = 5k. Correct.
-            // Test Case 2: 5k + (50k - 0) = 55k. Correct. (Client pays 5k burden + 50k shortfall? No, if shortfall is 50k, that is the WHOLE fee. 5k burden is INCLUDED in the 50k).
-            // So if Uncovered, we shouldn't pay 5k + 50k. Use Max?
-            // Note: `baseSessionBurden` is the client's share *within* the `baseSessionFee`.
-            // So valid share of coverage = `deduction` * (Burden/Fee ratio)? No.
+                // What if limit exists?
+                // Deduction = 50,000.
+                // Client pays 5,000 + Extra. (Normally).
 
-            // Let's stick to "Deduction is the Voucher Usage".
-            // Voucher Usage covers the fee.
-            // If Usage = 50k. Fee = 50k.
-            // Client contribution inside that 50k is 5k.
-            // So Gov contribution is 45k.
-            // `finalClientCost` in `sessions` table usually means "Amount Client Transfer to Center".
-            // So 5k.
+                // So Client pays: `baseSessionBurden` + `uncoveredBase`? 
+                // If Uncovered = 0 (Fully covered): Client pays `baseSessionBurden`.
+                // If Uncovered = 50,000 (No limit): Client pays 50,000.
+                // -> Logic: Client Pay = `baseSessionBurden` + `(baseSessionFee - deduction - baseSessionBurden_portion_of_uncovered?)`
+                // No, simpler: 
+                // "Limit" (200k) includes "Burden" (20k).
+                // If we deduct 50k from Limit. Client pays 5k.
+                // This 5k is PART of the 50k deduction?
+                // "20000/4=5000 ... 본인 부담금이 쌓인다"
+                // Using "Total Limit" approach, the client pays the burden regardless.
+                // AND if the limit is exhausted, the client pays the *rest* of the fee.
 
-            // If Usage = 0. Fee = 50k.
-            // Client pays 50k.
+                // Let's assume:
+                // Standard Client Cost = `baseSessionBurden` + `extraCost`.
+                // Shortfall = `baseSessionFee` - `deduction`.
+                // If Shortfall > 0 (Limit exceeded), Client pays Shortfall INSTEAD OF Coverage?
+                // No, Shortfall adds to cost.
 
-            // Formula: `finalClientCost` = `(baseSessionFee - deduction)` + `(deduction > 0 ? baseSessionBurden : 0)` ?
-            // If partial deduction? e.g. 25k remaining.
-            // Deduction = 25k.
-            // Uncovered = 25k.
-            // Client pays Uncovered (25k) + Burden on Covered (2.5k)? = 27.5k.
-            // Seems reasonable.
+                // Case 1: Covered. Deduction = 50k. Remaining Fee = 0.
+                // we want Client Cost = 5k.
 
-            // Let's use:
-            // `burdenRatio` = `baseSessionBurden` / `baseSessionFee` (approx).
-            // or just `baseSessionBurden` if full coverage.
+                // Case 2: Empty. Deduction = 0. Remaining Fee = 50k.
+                // We want Client Cost = 50k.
 
-            // Safe logic: calculated Client Cost = Uncovered Amount + (Covered Amount * Burden/Fee Ratio).
-            // But simpler: `finalClientCost` = `sessionFee` - `(deduction - calculated_burden_for_deduction)`.
-            // calculated_burden_for_deduction = `deduction` * (`baseSessionBurden` / `baseSessionFee`).
+                // Formula: `finalClientCost` = `baseSessionBurden` + `(baseSessionFee - deduction)` + `extraCost`?
+                // Test Case 1: 5k + (50k - 50k) = 5k. Correct.
+                // Test Case 2: 5k + (50k - 0) = 55k. Correct. (Client pays 5k burden + 50k shortfall? No, if shortfall is 50k, that is the WHOLE fee. 5k burden is INCLUDED in the 50k).
+                // So if Uncovered, we shouldn't pay 5k + 50k. Use Max?
+                // Note: `baseSessionBurden` is the client's share *within* the `baseSessionFee`.
+                // So valid share of coverage = `deduction` * (Burden/Fee ratio)? No.
 
-            // However, strictly adhering to User:
-            // "20000-20000=180000... 1회당 50000... 본인부담금 5000".
-            // "다소진하고 다 센터에 부담하게끔" -> Exhaust limit (which is 200k).
+                // Let's stick to "Deduction is the Voucher Usage".
+                // Voucher Usage covers the fee.
+                // If Usage = 50k. Fee = 50k.
+                // Client contribution inside that 50k is 5k.
+                // So Gov contribution is 45k.
+                // `finalClientCost` in `sessions` table usually means "Amount Client Transfer to Center".
+                // So 5k.
 
-            // So:
-            // `realGovSupport` = `deduction` - `burden_part`.
-            // `finalClientCost` = `sessionFee` - `realGovSupport`.
+                // If Usage = 0. Fee = 50k.
+                // Client pays 50k.
 
-            // `burden_part` for `deduction`:
-            // If `deduction` == `baseSessionFee`, `burden_part` = `baseSessionBurden`.
-            // If partial, proportional.
-            const burdenPart = deduction > 0 ? (deduction * (baseSessionBurden / baseSessionFee)) : 0
-            const realGovSupport = deduction - burdenPart
+                // Formula: `finalClientCost` = `(baseSessionFee - deduction)` + `(deduction > 0 ? baseSessionBurden : 0)` ?
+                // If partial deduction? e.g. 25k remaining.
+                // Deduction = 25k.
+                // Uncovered = 25k.
+                // Client pays Uncovered (25k) + Burden on Covered (2.5k)? = 27.5k.
+                // Seems reasonable.
 
-            finalClientCost = (sessionFee - deduction) + burdenPart + extraCost // Wait
-            // `sessionFee` includes `extraCost`? 
-            // `sessionFee` from above block was `baseSessionFee + extraCost`.
-            // `deduction` is from `baseSessionFee`.
+                // Let's use:
+                // `burdenRatio` = `baseSessionBurden` / `baseSessionFee` (approx).
+                // or just `baseSessionBurden` if full coverage.
 
-            // Let's recalculate accurately here.
+                // Safe logic: calculated Client Cost = Uncovered Amount + (Covered Amount * Burden/Fee Ratio).
+                // But simpler: `finalClientCost` = `sessionFee` - `(deduction - calculated_burden_for_deduction)`.
+                // calculated_burden_for_deduction = `deduction` * (`baseSessionBurden` / `baseSessionFee`).
 
-            // Final Logic:
-            const coveredAmount = deduction
-            const coveredBurden = Math.floor(coveredAmount * (baseSessionBurden / baseSessionFee))
-            const govSupport = coveredAmount - coveredBurden
+                // However, strictly adhering to User:
+                // "20000-20000=180000... 1회당 50000... 본인부담금 5000".
+                // "다소진하고 다 센터에 부담하게끔" -> Exhaust limit (which is 200k).
 
-            totalGovSupport = govSupport // Set for Single case
+                // So:
+                // `realGovSupport` = `deduction` - `burden_part`.
+                // `finalClientCost` = `sessionFee` - `realGovSupport`.
 
-            finalClientCost = sessionFee - govSupport
+                // `burden_part` for `deduction`:
+                // If `deduction` == `baseSessionFee`, `burden_part` = `baseSessionBurden`.
+                // If partial, proportional.
+                const burdenPart = deduction > 0 ? (deduction * (baseSessionBurden / baseSessionFee)) : 0
+                const realGovSupport = deduction - burdenPart
 
-            breakdown.push(`----------------`)
-            breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
-            breakdown.push(`(실질 정부 지원: -${govSupport.toLocaleString()}원)`)
-            breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
+                finalClientCost = (sessionFee - deduction) + burdenPart + extraCost // Wait
+                // `sessionFee` includes `extraCost`? 
+                // `sessionFee` from above block was `baseSessionFee + extraCost`.
+                // `deduction` is from `baseSessionFee`.
 
-        } else {
-            // General
-            finalClientCost = sessionFee
+                // Let's recalculate accurately here.
+
+                // Final Logic:
+                const coveredAmount = deduction
+                const coveredBurden = Math.floor(coveredAmount * (baseSessionBurden / baseSessionFee))
+                const govSupport = coveredAmount - coveredBurden
+
+                totalGovSupport = govSupport // Set for Single case
+
+                finalClientCost = sessionFee - govSupport
+
+                breakdown.push(`----------------`)
+                breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
+                breakdown.push(`(실질 정부 지원: -${govSupport.toLocaleString()}원)`)
+                breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
+
+            } else {
+                // General
+                finalClientCost = sessionFee
+            }
+
+            setCalcResult({
+                totalFee: sessionFee,
+                voucherSupport: totalGovSupport, // Use the calculated strict Gov Support
+                clientCost: finalClientCost,
+                breakdown,
+                voucherUsageMap,
+                sessionCounts: usages.reduce((acc, curr) => {
+                    // Find monthly limit
+                    const v = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === curr.vid)
+                    acc[curr.vid] = { current: curr.count + 1, total: v?.monthly_session_count || 4 }
+                    return acc
+                }, {} as Record<string, { current: number, total: number }>)
+            })
         }
 
-        setCalcResult({
-            totalFee: sessionFee,
-            voucherSupport: totalGovSupport, // Use the calculated strict Gov Support
-            clientCost: finalClientCost,
-            breakdown,
-            voucherUsageMap
-        })
-    }
+        const handleSubmit = async () => {
+            if (!selectedTeacher || !selectedClient || !date || !calcResult) return
 
-    const handleSubmit = async () => {
-        if (!selectedTeacher || !selectedClient || !date || !calcResult) return
+            const { error: sessionError, data: session } = await supabase.from('sessions').insert({
+                date: `${date} ${startTime}`,
+                teacher_id: selectedTeacher,
+                client_id: selectedClient,
+                duration_minutes: parseInt(duration),
+                total_fee: calcResult.totalFee,
+                total_support: calcResult.voucherSupport,
+                final_client_cost: calcResult.clientCost
+            }).select().single()
 
-        const { error: sessionError, data: session } = await supabase.from('sessions').insert({
-            date: `${date} ${startTime}`,
-            teacher_id: selectedTeacher,
-            client_id: selectedClient,
-            duration_minutes: parseInt(duration),
-            total_fee: calcResult.totalFee,
-            total_support: calcResult.voucherSupport,
-            final_client_cost: calcResult.clientCost
-        }).select().single()
+            if (sessionError) {
+                toast.error('저장 실패: ' + sessionError.message)
+                return
+            }
 
-        if (sessionError) {
-            toast.error('저장 실패: ' + sessionError.message)
-            return
+            if (selectedVouchers.length > 0) {
+                const voucherLinks = selectedVouchers.map(vid => ({
+                    session_id: session.id,
+                    voucher_id: vid,
+                    used_amount: (calcResult as any).voucherUsageMap?.[vid] || 0
+                }))
+                await supabase.from('session_vouchers').insert(voucherLinks)
+            }
+
+            toast.success('수업 기록 저장 완료')
+            // router.push('/report') // Removed as per user request
         }
 
-        if (selectedVouchers.length > 0) {
-            const voucherLinks = selectedVouchers.map(vid => ({
-                session_id: session.id,
-                voucher_id: vid,
-                used_amount: (calcResult as any).voucherUsageMap?.[vid] || 0
-            }))
-            await supabase.from('session_vouchers').insert(voucherLinks)
-        }
+        return (
+            <div className="p-4 max-w-lg mx-auto pb-24">
+                <h1 className="text-2xl font-bold mb-4">수업입력</h1>
 
-        toast.success('수업 기록 저장 완료')
-        // router.push('/report') // Removed as per user request
-    }
-
-    return (
-        <div className="p-4 max-w-lg mx-auto pb-24">
-            <h1 className="text-2xl font-bold mb-4">수업입력</h1>
-
-            <div className="space-y-4">
-                <Card>
-                    <CardHeader className="py-3">
-                        <CardTitle className="text-sm font-medium">수업 정보 입력</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 pb-4">
-                        {/* Date & Time Row */}
-                        <div className="flex gap-2">
-                            <div className="flex-1">
-                                <label className="text-xs text-gray-500 mb-1 block">일자</label>
-                                <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-9" />
+                <div className="space-y-4">
+                    <Card>
+                        <CardHeader className="py-3">
+                            <CardTitle className="text-sm font-medium">수업 정보 입력</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4 pb-4">
+                            {/* Date & Time Row */}
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <label className="text-xs text-gray-500 mb-1 block">일자</label>
+                                    <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-9" />
+                                </div>
+                                <div className="w-1/3">
+                                    <label className="text-xs text-gray-500 mb-1 block">시간</label>
+                                    <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="h-9" />
+                                </div>
                             </div>
-                            <div className="w-1/3">
-                                <label className="text-xs text-gray-500 mb-1 block">시간</label>
-                                <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="h-9" />
-                            </div>
-                        </div>
 
-                        {/* Duration Select */}
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">수업 시간 (분)</label>
-                            <Select value={duration} onValueChange={setDuration}>
-                                <SelectTrigger className="h-9">
-                                    <SelectValue placeholder="시간 선택" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="30">30분</SelectItem>
-                                    <SelectItem value="40">40분 (기본)</SelectItem>
-                                    <SelectItem value="50">50분</SelectItem>
-                                    <SelectItem value="60">60분</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Teacher & Client Row */}
-                        <div className="grid grid-cols-2 gap-2">
+                            {/* Duration Select */}
                             <div>
-                                <label className="text-xs text-gray-500 mb-1 block">담당 선생님</label>
-                                <Select value={selectedTeacher} onValueChange={setSelectedTeacher}>
+                                <label className="text-xs text-gray-500 mb-1 block">수업 시간 (분)</label>
+                                <Select value={duration} onValueChange={setDuration}>
                                     <SelectTrigger className="h-9">
-                                        <SelectValue placeholder="선생님" />
+                                        <SelectValue placeholder="시간 선택" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {teachers.map(t => (
-                                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                                        ))}
+                                        <SelectItem value="30">30분</SelectItem>
+                                        <SelectItem value="40">40분 (기본)</SelectItem>
+                                        <SelectItem value="50">50분</SelectItem>
+                                        <SelectItem value="60">60분</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div>
-                                <label className="text-xs text-gray-500 mb-1 block">내담자</label>
-                                <Select value={selectedClient} onValueChange={setSelectedClient} disabled={!selectedTeacher}>
-                                    <SelectTrigger className="h-9">
-                                        <SelectValue placeholder={!selectedTeacher ? "-" : "내담자"} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {filteredClients.map(c => (
-                                            <SelectItem key={c.id} value={c.id}>
-                                                {c.name} {c.birth_date && `(${c.birth_date})`}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        </div>
 
-                        {/* Multi-Voucher Selection */}
-                        {selectedClient && (
-                            <div className="pt-2 border-t mt-2">
-                                <label className="text-xs font-medium mb-2 block">적용 바우처 (다중 선택 가능)</label>
-                                {filteredVouchers.length > 0 ? (
-                                    <div className="flex flex-wrap gap-2">
-                                        {filteredVouchers.map(v => (
-                                            <div
-                                                key={v.id}
-                                                className={`
+                            {/* Teacher & Client Row */}
+                            <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label className="text-xs text-gray-500 mb-1 block">담당 선생님</label>
+                                    <Select value={selectedTeacher} onValueChange={setSelectedTeacher}>
+                                        <SelectTrigger className="h-9">
+                                            <SelectValue placeholder="선생님" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {teachers.map(t => (
+                                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-gray-500 mb-1 block">내담자</label>
+                                    <Select value={selectedClient} onValueChange={setSelectedClient} disabled={!selectedTeacher}>
+                                        <SelectTrigger className="h-9">
+                                            <SelectValue placeholder={!selectedTeacher ? "-" : "내담자"} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {filteredClients.map(c => (
+                                                <SelectItem key={c.id} value={c.id}>
+                                                    {c.name} {c.birth_date && `(${c.birth_date})`}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+
+                            {/* Multi-Voucher Selection */}
+                            {selectedClient && (
+                                <div className="pt-2 border-t mt-2">
+                                    <label className="text-xs font-medium mb-2 block">적용 바우처 (다중 선택 가능)</label>
+                                    {filteredVouchers.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                            {filteredVouchers.map(v => (
+                                                <div
+                                                    key={v.id}
+                                                    className={`
                                                     px-3 py-1.5 rounded-full text-xs border cursor-pointer transition-colors select-none
                                                     ${selectedVouchers.includes(v.id)
-                                                        ? 'bg-primary text-primary-foreground border-primary font-medium'
-                                                        : 'bg-white hover:bg-gray-50 text-gray-600'
-                                                    }
+                                                            ? 'bg-primary text-primary-foreground border-primary font-medium'
+                                                            : 'bg-white hover:bg-gray-50 text-gray-600'
+                                                        }
                                                 `}
-                                                onClick={() => {
-                                                    if (selectedVouchers.includes(v.id)) {
-                                                        setSelectedVouchers(selectedVouchers.filter(id => id !== v.id))
-                                                    } else {
-                                                        setSelectedVouchers([...selectedVouchers, v.id])
-                                                    }
-                                                }}
-                                            >
-                                                {v.name}
-                                                {selectedVouchers.includes(v.id) && <span className="ml-1">✓</span>}
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <p className="text-xs text-gray-400">적용 가능한 바우처가 없습니다.</p>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Calculation Result */}
-                {calcResult && (
-                    <Card className="bg-slate-50 border-slate-200">
-                        <CardHeader className="py-2 min-h-[auto]">
-                            <CardTitle className="text-sm font-medium text-slate-700">예상 결제 내역</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-1 pb-3">
-                            {calcResult.breakdown.map((line, idx) => (
-                                <div key={idx} className={`text-xs flex justify-between ${line.includes('최종') ? 'font-bold text-sm mt-2 pt-2 border-t border-slate-300 text-slate-900' : 'text-slate-600'} ${line.includes('---') ? 'font-semibold text-slate-800 mt-1' : ''}`}>
-                                    {line.includes(':') ? (
-                                        <>
-                                            <span>{line.split(':')[0]}</span>
-                                            <span>{line.split(':')[1]}</span>
-                                        </>
+                                                    onClick={() => {
+                                                        if (selectedVouchers.includes(v.id)) {
+                                                            setSelectedVouchers(selectedVouchers.filter(id => id !== v.id))
+                                                        } else {
+                                                            setSelectedVouchers([...selectedVouchers, v.id])
+                                                        }
+                                                    }}
+                                                >
+                                                    {v.name}
+                                                    {selectedVouchers.includes(v.id) && <span className="ml-1">✓</span>}
+                                                    {/* Show count if available in calcResult or filtered? 
+                                                    Ideally we want to show it BEFORE selection if possible, but we need to calc it.
+                                                    Actually, calcResult updates AFTER selection. 
+                                                    If we want to show "2/4" on the badge, we need to fetch counts whenever selectedClient changes.
+                                                    But calculateFee does that.
+                                                    Let's use calcResult.sessionCounts if available for selected ones.
+                                                */}
+                                                    {selectedVouchers.includes(v.id) && calcResult?.sessionCounts?.[v.id] && (
+                                                        <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${calcResult.sessionCounts[v.id].current > calcResult.sessionCounts[v.id].total
+                                                                ? 'bg-red-100 text-red-600'
+                                                                : 'bg-primary-foreground/20'
+                                                            }`}>
+                                                            {calcResult.sessionCounts[v.id].current} / {calcResult.sessionCounts[v.id].total}회
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
                                     ) : (
-                                        <span className={line.includes('⚠️') ? 'text-red-500 font-medium' : ''}>{line}</span>
+                                        <p className="text-xs text-gray-400">적용 가능한 바우처가 없습니다.</p>
                                     )}
                                 </div>
-                            ))}
+                            )}
                         </CardContent>
                     </Card>
-                )}
 
-                <Button className="w-full h-11 text-base font-semibold" onClick={handleSubmit} disabled={!calcResult}>
-                    기록 저장하기
-                </Button>
+                    {/* Calculation Result */}
+                    {calcResult && (
+                        <Card className="bg-slate-50 border-slate-200">
+                            <CardHeader className="py-2 min-h-[auto]">
+                                <CardTitle className="text-sm font-medium text-slate-700">예상 결제 내역</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-1 pb-3">
+                                {calcResult.breakdown.map((line, idx) => (
+                                    <div key={idx} className={`text-xs flex justify-between ${line.includes('최종') ? 'font-bold text-sm mt-2 pt-2 border-t border-slate-300 text-slate-900' : 'text-slate-600'} ${line.includes('---') ? 'font-semibold text-slate-800 mt-1' : ''}`}>
+                                        {line.includes(':') ? (
+                                            <>
+                                                <span>{line.split(':')[0]}</span>
+                                                <span>{line.split(':')[1]}</span>
+                                            </>
+                                        ) : (
+                                            <span className={line.includes('⚠️') ? 'text-red-500 font-medium' : ''}>{line}</span>
+                                        )}
+                                    </div>
+                                ))}
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    <Button className="w-full h-11 text-base font-semibold" onClick={handleSubmit} disabled={!calcResult}>
+                        기록 저장하기
+                    </Button>
+                </div>
             </div>
-        </div>
-    )
-}
+        )
+    }
 
-export default function RecordPage() {
-    return (
-        <Suspense fallback={<div className="p-4 text-center">로딩중...</div>}>
-            <RecordContent />
-        </Suspense>
-    )
-}
+    export default function RecordPage() {
+        return (
+            <Suspense fallback={<div className="p-4 text-center">로딩중...</div>}>
+                <RecordContent />
+            </Suspense>
+        )
+    }
