@@ -156,21 +156,28 @@ function RecordContent() {
             const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
             const endStr = format(endOfMonth, 'yyyy-MM-dd')
 
-            usages = await Promise.all(selectedVouchers.map(async vid => {
-                const { data } = await supabase
-                    .from('session_vouchers')
-                    .select('used_amount, sessions!inner(date, client_id)')
-                    .eq('voucher_id', vid)
-                    .eq('sessions.client_id', selectedClient)
-                    .gte('sessions.date', startStr)
-                    .lte('sessions.date', endStr)
-                const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
-                // Count distinct sessions? data is from session_vouchers. Each row is one voucher usage for one session.
-                // But if we have multiple entries? Usually one per session.
-                // data.length is the count of sessions this voucher was used in this month.
-                const count = data?.length || 0
-                return { vid, used, count }
-            }))
+            try {
+                usages = await Promise.all(selectedVouchers.map(async vid => {
+                    const { data, error } = await supabase
+                        .from('session_vouchers')
+                        .select('used_amount, sessions!inner(date, client_id)')
+                        .eq('voucher_id', vid)
+                        .eq('sessions.client_id', selectedClient)
+                        .gte('sessions.date', startStr)
+                        .lte('sessions.date', endStr)
+
+                    if (error) {
+                        console.error('Error fetching usages:', error)
+                        return { vid, used: 0, count: 0 }
+                    }
+
+                    const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
+                    const count = data?.length || 0
+                    return { vid, used, count }
+                }))
+            } catch (e) {
+                console.error('Usage fetch failed:', e)
+            }
         }
 
         let sessionFee = 0
@@ -564,7 +571,7 @@ function RecordContent() {
 
         return (
             <div className="p-4 max-w-lg mx-auto pb-24">
-                <h1 className="text-2xl font-bold mb-4">수업입력</h1>
+                <h1 className="text-2xl font-bold mb-4">수업입력 (NEW)</h1>
 
                 <div className="space-y-4">
                     <Card>
