@@ -189,8 +189,152 @@ function RecordContent() {
 
         // 2. Determine Session Fee Logic
         if (isMulti) {
-            sessionFee = timeAdjustedBaseFee
-            breakdown.push(`[복합결제] 센터 기본 수업료 적용: ${sessionFee.toLocaleString()}원`)
+            // Pooled Multi-Voucher Logic
+            // 1. Aggregate Totals
+            let totalMonthlyLimit = 0
+            let totalMonthlyCount = 0
+            let totalMonthlyBurden = 0
+            let currentTotalUsedCount = 0
+
+            // Helper to get Client Voucher info easily
+            const cvMap = new Map()
+            for (const c of clientVouchers) {
+                if (c.client_id === selectedClient) {
+                    cvMap.set(c.voucher_id, c)
+                }
+            }
+
+            for (const vid of selectedVouchers) {
+                const voucher = vouchers.find(v => v.id === vid)
+                const cv = cvMap.get(vid)
+                const usage = usages.find(u => u.vid === vid)
+
+                totalMonthlyLimit += (voucher?.support_amount || 0)
+                totalMonthlyCount += (cv?.monthly_session_count || 4)
+                totalMonthlyBurden += (cv?.monthly_personal_burden || 0)
+                currentTotalUsedCount += (usage?.count || 0)
+            }
+
+            // 2. Calculate Per Session Averages (Pooled)
+            // Avoid division by zero
+            const pooledCount = totalMonthlyCount > 0 ? totalMonthlyCount : 1
+            const avgSessionLimit = Math.floor(totalMonthlyLimit / pooledCount) // "Face Value" to deduct per session
+            const avgSessionBurden = Math.floor(totalMonthlyBurden / pooledCount) // Client burden portion within Face Value
+            const avgPureGovSupport = avgSessionLimit - avgSessionBurden
+
+            // 3. Current Session Status
+            const currentSessionNum = currentTotalUsedCount + 1
+            const isOverLimit = currentSessionNum > totalMonthlyCount
+
+            // 4. Overtime Cost
+            const durationMin = parseInt(duration) || 0
+            let extraCost = 0
+            if (durationMin > 40) {
+                const extraTime = durationMin - 40
+                const extraUnits = Math.ceil(extraTime / 10)
+                extraCost = extraUnits * extraFeeUnit
+            }
+
+            sessionFee = timeAdjustedBaseFee // Includes extraCost if applied to base?
+            // Wait, timeAdjustedBaseFee calculated earlier:
+            // const durationMin = parseInt(duration) || 0
+            // let timeAdjustedBaseFee = baseFee
+            // if (durationMin > 40) { ... adds extra units * 10000 }
+
+            // Re-calculate session components explicitly to match Single Logic structure if needed, 
+            // but `sessionFee` IS the Total Target Fee.
+
+            breakdown.push(`[복합결제] 통합 바우처 적용`)
+            breakdown.push(`- 통합 한도: ${totalMonthlyLimit.toLocaleString()}원 / 통합 횟수: ${totalMonthlyCount}회`)
+            breakdown.push(`- 1회 평균 지원금(한도차감액): ${avgSessionLimit.toLocaleString()}원`)
+
+            if (isOverLimit) {
+                // Over Limit Case
+                totalGovSupport = 0
+                finalClientCost = sessionFee
+                totalDeducted = 0
+
+                breakdown.push(`⚠️ 통합 횟수 초과 (${currentSessionNum}/${totalMonthlyCount}회)`)
+                breakdown.push(`- 센터 기본 수업료 전액 본인부담 적용`)
+                breakdown.push(`= 1회 최종 수업료: ${sessionFee.toLocaleString()}원`)
+
+            } else {
+                // Normal Case
+                const deduction = avgSessionLimit // We distribute this across vouchers
+                totalDeducted = deduction
+
+                // Gov Support part of this deduction
+                const govSupport = avgPureGovSupport
+                totalGovSupport = govSupport
+
+                // Client Cost
+                // Formula: Total Fee - Gov Support
+                // (This implicitly includes the Burden + Extra Cost + Any Gap between Fee and Voucher Limit)
+                finalClientCost = sessionFee - govSupport
+
+                breakdown.push(`- 현재 ${currentSessionNum}/${totalMonthlyCount}회차 수업`)
+                breakdown.push(`- 1회 순수 정부지원금: ${govSupport.toLocaleString()}원`)
+
+                if (extraCost > 0) {
+                    breakdown.push(`- (추가 시간 비용 ${extraCost.toLocaleString()}원 포함됨)`)
+                }
+
+                breakdown.push(`= 최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
+
+                // Distribute Deduction Sequentially
+                let remainingDeduction = deduction
+
+                for (const vid of selectedVouchers) {
+                    if (remainingDeduction <= 0) break
+
+                    const voucher = vouchers.find(v => v.id === vid)
+                    const usage = usages.find(u => u.vid === vid)
+                    const vLimit = voucher?.support_amount || 0
+                    const vUsed = usage?.used || 0
+                    const vRemaining = Math.max(0, vLimit - vUsed)
+
+                    // Deduct as much as possible from this voucher?
+                    // Or just deduct? "Pooled" implies we might drain one voucher faster.
+                    // Let's just deduct from the first available limit.
+                    const amountToDeduct = Math.min(remainingDeduction, vRemaining)
+
+                    if (amountToDeduct > 0) {
+                        voucherUsageMap[vid] = (voucherUsageMap[vid] || 0) + amountToDeduct
+                        remainingDeduction -= amountToDeduct
+                        breakdown.push(`   > ${voucher?.name} 차감: -${amountToDeduct.toLocaleString()}원`)
+                    }
+                }
+
+                if (remainingDeduction > 0) {
+                    // If we still have deduction amount but no limit left?
+                    // Technically this shouldn't happen if we are within "Count" and limits are consistent with counts.
+                    // But if it does, it's just tracked as "Used" (maybe creating negative limit? or just stopped?)
+                    // For now, we only deduct what's available. 
+                    // If we can't deduct full amount, it means "Limit Exhausted" earlier than Count?
+                    // In that case, Client pays the difference? 
+                    // But we already set `finalClientCost` based on `govSupport`.
+                    // If we can't deduct `avgSessionLimit` from DB, it means `govSupport` was effectively "phantom".
+                    // But let's assume valid state.
+                    breakdown.push(`   > (잔여 한도 부족으로 일부 미차감: ${remainingDeduction.toLocaleString()}원)`)
+                }
+            }
+
+            // Update Session Counts for UI (Pooled View? Or just individual?)
+            // The UI Badge logic uses `sessionCounts[vid]`.
+            // We should populate it so the badges show something.
+            // Maybe show "Current/Pool"? Or just "Current/Total" per voucher?
+            // "Current" is hard to define in Pooled mode per voucher (since we sum them).
+            // Let's just show the individual 'used count' and 'individual total' for the badges,
+            // but the User knows it's pooled. 
+            // OR we can update `sessionCounts` to show the Pooled values for ALL selected vouchers.
+            // Let's do that for clarity.
+            const pooledSessionStr = { current: currentSessionNum, total: totalMonthlyCount }
+            selectedVouchers.forEach(vid => {
+                // We need to return this map in the calcResult
+            })
+            // We will handle sessionCounts population in the existing reduce block below or override it.
+            // Let's override it in step 4 or modifying the reduce at the end.
+
         } else if (selectedVouchers.length === 1) {
             const vid = selectedVouchers[0]
             const voucher = vouchers.find(v => v.id === vid)
