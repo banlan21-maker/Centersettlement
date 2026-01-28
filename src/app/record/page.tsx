@@ -516,7 +516,7 @@ function RecordContent() {
         }
 
         toast.success('수업 기록 저장 완료')
-        router.push('/report')
+        // router.push('/report') // Removed as per user request
     }
 
     return (
