@@ -50,8 +50,10 @@ function RecordContent() {
         totalFee: number,
         voucherSupport: number,
         clientCost: number,
+        clientCost: number,
         breakdown: string[],
-        voucherUsageMap?: Record<string, number>
+        voucherUsageMap?: Record<string, number>,
+        sessionCounts?: Record<string, { current: number, total: number }>
     } | null>(null)
 
     useEffect(() => {
@@ -665,8 +667,8 @@ function RecordContent() {
                                                 */}
                                                     {selectedVouchers.includes(v.id) && calcResult?.sessionCounts?.[v.id] && (
                                                         <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${calcResult.sessionCounts[v.id].current > calcResult.sessionCounts[v.id].total
-                                                                ? 'bg-red-100 text-red-600'
-                                                                : 'bg-primary-foreground/20'
+                                                            ? 'bg-red-100 text-red-600'
+                                                            : 'bg-primary-foreground/20'
                                                             }`}>
                                                             {calcResult.sessionCounts[v.id].current} / {calcResult.sessionCounts[v.id].total}회
                                                         </span>
