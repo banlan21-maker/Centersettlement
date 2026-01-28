@@ -168,9 +168,6 @@ function RecordContent() {
         let isMulti = selectedVouchers.length > 1
         let feeRemaining = 0
         let totalDeducted = 0
-        let isMulti = selectedVouchers.length > 1
-        let feeRemaining = 0
-        let totalDeducted = 0
         let totalGovSupport = 0
         const voucherUsageMap: Record<string, number> = {}
 
