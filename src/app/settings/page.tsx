@@ -96,7 +96,7 @@ export default function SettingsPage() {
     const [newClientName, setNewClientName] = useState('')
     const [newClientBirthDate, setNewClientBirthDate] = useState('')
     const [newClientPhone, setNewClientPhone] = useState('')
-    const [clientVoucherSelections, setClientVoucherSelections] = useState<Record<string, { selected: boolean, copay: string }>>({})
+    const [clientVoucherSelections, setClientVoucherSelections] = useState<Record<string, { selected: boolean, count: string, burden: string }>>({})
     const [editingClientId, setEditingClientId] = useState<string | null>(null)
 
     // Client Filter State
@@ -149,15 +149,15 @@ export default function SettingsPage() {
                 setVouchers(v)
                 // Initialize selections only if not editing currently to avoid overwrite
                 if (!editingClientId) {
-                    const initialSelections: Record<string, { selected: boolean, copay: string }> = {}
+                    const initialSelections: Record<string, { selected: boolean, count: string, burden: string }> = {}
                     v.forEach(voucher => {
-                        initialSelections[voucher.id] = { selected: false, copay: '0' }
+                        initialSelections[voucher.id] = { selected: false, count: '4', burden: '0' }
                     })
                     setClientVoucherSelections(initialSelections)
                 }
             }
 
-            const { data: c } = await supabase.from('clients').select('*, client_vouchers(voucher_id, copay, vouchers(name))').order('created_at', { ascending: false })
+            const { data: c } = await supabase.from('clients').select('*, client_vouchers(voucher_id, copay, monthly_session_count, monthly_personal_burden, vouchers(name))').order('created_at', { ascending: false })
             if (c) {
                 setClients(c)
                 setFilteredClients(c)
@@ -331,10 +331,10 @@ export default function SettingsPage() {
         }))
     }
 
-    const handleVoucherCopayChange = (voucherId: string, value: string) => {
+    const handleVoucherInfoChange = (voucherId: string, field: 'count' | 'burden', value: string) => {
         setClientVoucherSelections(prev => ({
             ...prev,
-            [voucherId]: { ...prev[voucherId], copay: value }
+            [voucherId]: { ...prev[voucherId], [field]: value }
         }))
     }
 
@@ -387,7 +387,9 @@ export default function SettingsPage() {
             .map(([voucherId, val]) => ({
                 client_id: clientId,
                 voucher_id: voucherId,
-                copay: parseInt(val.copay) || 0
+                monthly_session_count: parseInt(val.count) || 4,
+                monthly_personal_burden: parseInt(val.burden) || 0,
+                copay: 0 // Legacy
             }))
 
         if (vouchersToInsert.length > 0) {
@@ -403,13 +405,17 @@ export default function SettingsPage() {
         setNewClientPhone(c.phone_number || '')
 
         // Populate vouchers
-        const selections: Record<string, { selected: boolean, copay: string }> = {}
+        const selections: Record<string, { selected: boolean, count: string, burden: string }> = {}
         vouchers.forEach(v => {
             const cv = c.client_vouchers?.find((item: any) => item.voucher_id === v.id)
             if (cv) {
-                selections[v.id] = { selected: true, copay: cv.copay?.toString() || '0' }
+                selections[v.id] = {
+                    selected: true,
+                    count: cv.monthly_session_count?.toString() || '4',
+                    burden: cv.monthly_personal_burden?.toString() || '0'
+                }
             } else {
-                selections[v.id] = { selected: false, copay: '0' }
+                selections[v.id] = { selected: false, count: '4', burden: '0' }
             }
         })
         setClientVoucherSelections(selections)
@@ -422,9 +428,9 @@ export default function SettingsPage() {
         setNewClientBirthDate('')
         setNewClientPhone('')
 
-        const initialSelections: Record<string, { selected: boolean, copay: string }> = {}
+        const initialSelections: Record<string, { selected: boolean, count: string, burden: string }> = {}
         vouchers.forEach(voucher => {
-            initialSelections[voucher.id] = { selected: false, copay: '0' }
+            initialSelections[voucher.id] = { selected: false, count: '4', burden: '0' }
         })
         setClientVoucherSelections(initialSelections)
     }
@@ -667,13 +673,25 @@ export default function SettingsPage() {
                                         </div>
                                         {clientVoucherSelections[v.id]?.selected && (
                                             <div className="flex items-center gap-2">
-                                                <span className="text-xs text-gray-500 whitespace-nowrap">1회당 본인부담금:</span>
+                                                <Select
+                                                    value={clientVoucherSelections[v.id]?.count?.toString()}
+                                                    onValueChange={val => handleVoucherInfoChange(v.id, 'count', val)}
+                                                >
+                                                    <SelectTrigger className="w-20 h-8 text-xs">
+                                                        <SelectValue placeholder="횟수" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {[1, 2, 3, 4, 5].map(num => (
+                                                            <SelectItem key={num} value={num.toString()}>{num}회</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
                                                 <Input
-                                                    placeholder="본인부담금"
+                                                    placeholder="월 본인부담금"
                                                     type="number"
-                                                    className="w-24 h-8 text-sm"
-                                                    value={clientVoucherSelections[v.id]?.copay}
-                                                    onChange={e => handleVoucherCopayChange(v.id, e.target.value)}
+                                                    className="w-28 h-8 text-sm"
+                                                    value={clientVoucherSelections[v.id]?.burden}
+                                                    onChange={e => handleVoucherInfoChange(v.id, 'burden', e.target.value)}
                                                 />
                                             </div>
                                         )}
@@ -735,8 +753,8 @@ export default function SettingsPage() {
                                     <div className="mt-2 text-xs text-gray-500 space-y-1">
                                         {c.client_vouchers.map((cv: any) => (
                                             <div key={cv.voucher_id} className="flex justify-between">
-                                                <span>• {cv.vouchers?.name}</span>
-                                                <span>부담금: {cv.copay?.toLocaleString()}원</span>
+                                                <span>{cv.vouchers?.name}</span>
+                                                <span>월 {cv.monthly_session_count}회 / 부담금: {cv.monthly_personal_burden?.toLocaleString()}원</span>
                                             </div>
                                         ))}
                                     </div>

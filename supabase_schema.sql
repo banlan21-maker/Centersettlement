@@ -55,7 +55,9 @@ create table if not exists client_vouchers (
   id uuid primary key default uuid_generate_v4(),
   client_id uuid references clients(id) on delete cascade,
   voucher_id uuid references vouchers(id) on delete cascade,
-  copay integer default 0,
+  copay integer default 0, -- Legacy / Calculated per session
+  monthly_session_count integer default 4, -- Default 4 sessions per month
+  monthly_personal_burden integer default 0, -- Total monthly personal burden
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

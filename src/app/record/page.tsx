@@ -154,15 +154,73 @@ function RecordContent() {
             const voucher = vouchers.find(v => v.id === vid)
             const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
 
-            const voucherFee = (voucher?.default_fee && voucher.default_fee > 0) ? voucher.default_fee : baseFee
-            const copay = clientVoucher?.copay || 0
+            // New Logic: Monthly Based Calculation
+            const monthlySupportTotal = voucher?.support_amount || 0 // Total Monthly Value (Gov + Personal)
+            const monthlyCount = clientVoucher?.monthly_session_count || 4
+            const monthlyBurden = clientVoucher?.monthly_personal_burden || 0
 
-            // Single Mode: Fee is Voucher's Session Fee + Copay
-            sessionFee = voucherFee + copay
+            // Base Session Calculation
+            const baseSessionFee = Math.floor(monthlySupportTotal / monthlyCount)
+            const baseSessionBurden = Math.floor(monthlyBurden / monthlyCount)
+            const baseSessionSupport = baseSessionFee - baseSessionBurden
+
+            // Overtime Calculation
+            let extraCost = 0
+            const durationMin = parseInt(duration) || 0
+            if (durationMin > 40) {
+                const extraTime = durationMin - 40
+                const extraUnits = Math.ceil(extraTime / 10)
+                extraCost = extraUnits * extraFeeUnit
+            }
+
+            // Final Session Totals
+            sessionFee = baseSessionFee + extraCost
+            const sessionBurden = baseSessionBurden + extraCost
+            const sessionSupport = baseSessionSupport
+
             breakdown.push(`[단일결제] ${voucher?.name}`)
-            breakdown.push(`- 바우처 기준 수가: ${voucherFee.toLocaleString()}원`)
-            breakdown.push(`- 고정 본인부담금: ${copay.toLocaleString()}원`)
-            breakdown.push(`= 1회 총 수업비: ${sessionFee.toLocaleString()}원`)
+            breakdown.push(`- 월 총액: ${monthlySupportTotal.toLocaleString()}원 / 월 ${monthlyCount}회`)
+            breakdown.push(`- 1회 기본 수업료: ${baseSessionFee.toLocaleString()}원`)
+            breakdown.push(`- 1회 기본 본인부담금: ${baseSessionBurden.toLocaleString()}원`)
+
+            if (extraCost > 0) {
+                breakdown.push(`- 추가 시간 비용(+${(durationMin - 40)}분): ${extraCost.toLocaleString()}원 (전액 본인부담)`)
+            }
+
+            breakdown.push(`= 1회 최종 수업료: ${sessionFee.toLocaleString()}원`)
+            breakdown.push(`= 최종 본인부담금: ${sessionBurden.toLocaleString()}원`)
+            breakdown.push(`= 바우처 지원금: ${sessionSupport.toLocaleString()}원`)
+
+            // Set specific client cost directly here to avoid re-calculation in deduction logic, 
+            // but we still need deduction logic for checking limits (though limits are less relevant if we just calculate from monthly).
+            // However, we should still track "used_amount" for the voucher.
+            // Used amount for voucher = sessionSupport? Or sessionFee?
+            // "바우처의 월 지원금은 ... 차감해나가고" -> usually means the Total Voucher Amount is decremented.
+            // But checking limits: "월 바우처 지원금과 월 본인 부담금을 다소진하고"
+            // If we use the "Calculated" fee, we deduct that from the limit.
+
+            // Allow the deduction logic below to run, but we need to ensure "Client Cost" is set to our calculated `sessionBurden`
+            // and NOT re-derived from "Total - Support" if "Support" is capped by remaining limit.
+            // Actually, if limit is reached, User pays more? 
+            // "다소진하고 다 센터에 부담하게끔 하는게 목표다" -> "Everything else to Center (User pays?)"
+            // Text: "다소진하고 다 센터에 부담하게끔" -> "Have Center bear it"? No, "Have (Client) pay to Center".
+            // If limit is exhausted, Client pays the rest.
+            // So we can let deduction logic handle the "Limit Check".
+
+            // But we need to define the "Deductible Amount" (Target Support).
+            // The Target Deductible from Voucher is `sessionSupport` (or `baseSessionFee` if the voucher tracks Total).
+            // User: "200000-20000=180000... 차감".
+            // Deducting 50,000 (Total) or 45,000 (Support)? 
+            // "1회 수업당 200000/4=50000(1회당 수업료)으로 계산해서 차감해나가고"
+            // This clearly says deduct 50,000 from the 200,000 pot.
+            // So we deduct `sessionFee` (excluding extra cost? or including?).
+            // "20000/4=5000 해서 ... 본인 부담금이 쌓인다".
+            // It seems we track "Total Used" vs "Total Limit".
+
+            // We'll treat `sessionFee` (Base) as the amount to deduct from `voucher.support_amount`.
+            // Extra cost is separate (purely client).
+
+            // Override the logic below:
         } else {
             // No voucher
             sessionFee = timeAdjustedBaseFee
@@ -231,17 +289,153 @@ function RecordContent() {
             breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
             breakdown.push(`차액 (내담자 부담): ${finalClientCost.toLocaleString()}원`)
         } else if (selectedVouchers.length === 1) {
-            // Single: Client pays Fixed Copay + Any Excess (if limit exceeded)
-            const vid = selectedVouchers[0]
-            const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
-            const fixedCopay = clientVoucher?.copay || 0
+            // Single Voucher Logic (New)
+            // We calculated target fee above.
+            // We just need to check if we have enough limit?
+            // User's logic implies a fixed schedule "Monthly Limit / Count".
+            // If they run out? "Exhaust and pay remaining".
 
-            const realSupport = Math.max(0, totalDeducted - fixedCopay)
-            finalClientCost = sessionFee - realSupport
+            const vid = selectedVouchers[0]
+            const voucher = vouchers.find(v => v.id === vid)
+            const usageInfo = usages.find(u => u.vid === vid)
+            const usedAmount = usageInfo?.used || 0
+            const limit = voucher?.support_amount || 0 // Total Limit
+
+            const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
+            const monthlyCount = clientVoucher?.monthly_session_count || 4
+            const monthlyBurden = clientVoucher?.monthly_personal_burden || 0
+
+            const baseSessionFee = Math.floor(limit / monthlyCount)
+            const baseSessionBurden = Math.floor(monthlyBurden / monthlyCount)
+
+            // Extra Cost
+            const durationMin = parseInt(duration) || 0
+            let extraCost = 0
+            if (durationMin > 40) {
+                const extraTime = durationMin - 40
+                const extraUnits = Math.ceil(extraTime / 10)
+                extraCost = extraUnits * extraFeeUnit
+            }
+
+            // Deduct Base Fee from Limit
+            const remainingLimit = Math.max(0, limit - usedAmount)
+            const deduction = Math.min(baseSessionFee, remainingLimit)
+
+            totalDeducted = deduction // This is what we deduct from the Voucher (Total Pot)
+            voucherUsageMap[vid] = deduction
+
+            // Client Cost:
+            // 1. Uncovered Base Fee (if limit exceeded)
+            const uncoveredBase = baseSessionFee - deduction
+            // 2. Base Burden (if covered, we still pay Burden. If uncovered, we pay Full? 
+            // "Total" pot includes burden.
+            // If we deduct 50,000 from 200,000.
+            // Client pays 5,000.
+            // If 50,000 is fully deducted, it implies Gov pays 45k, Client 5k.
+            // The "Deduction" records the CONSUMPTION of the voucher.
+
+            // Wait, if `deduction` (from param `used_amount` in session_vouchers) counts towards the limit.
+            // And User says "Deduct 50,000".
+            // We save `used_amount` = 50,000.
+            // And `final_client_cost`.
+
+            // What if limit is zero?
+            // Deduction = 0.
+            // Uncovered = 50,000.
+            // Client pays 50,000 + Extra.
+
+            // What if limit exists?
+            // Deduction = 50,000.
+            // Client pays 5,000 + Extra. (Normally).
+
+            // So Client pays: `baseSessionBurden` + `uncoveredBase`? 
+            // If Uncovered = 0 (Fully covered): Client pays `baseSessionBurden`.
+            // If Uncovered = 50,000 (No limit): Client pays 50,000.
+            // -> Logic: Client Pay = `baseSessionBurden` + `(baseSessionFee - deduction - baseSessionBurden_portion_of_uncovered?)`
+            // No, simpler: 
+            // "Limit" (200k) includes "Burden" (20k).
+            // If we deduct 50k from Limit. Client pays 5k.
+            // This 5k is PART of the 50k deduction?
+            // "20000/4=5000 ... 본인 부담금이 쌓인다"
+            // Using "Total Limit" approach, the client pays the burden regardless.
+            // AND if the limit is exhausted, the client pays the *rest* of the fee.
+
+            // Let's assume:
+            // Standard Client Cost = `baseSessionBurden` + `extraCost`.
+            // Shortfall = `baseSessionFee` - `deduction`.
+            // If Shortfall > 0 (Limit exceeded), Client pays Shortfall INSTEAD OF Coverage?
+            // No, Shortfall adds to cost.
+
+            // Case 1: Covered. Deduction = 50k. Remaining Fee = 0.
+            // we want Client Cost = 5k.
+
+            // Case 2: Empty. Deduction = 0. Remaining Fee = 50k.
+            // We want Client Cost = 50k.
+
+            // Formula: `finalClientCost` = `baseSessionBurden` + `(baseSessionFee - deduction)` + `extraCost`?
+            // Test Case 1: 5k + (50k - 50k) = 5k. Correct.
+            // Test Case 2: 5k + (50k - 0) = 55k. Correct. (Client pays 5k burden + 50k shortfall? No, if shortfall is 50k, that is the WHOLE fee. 5k burden is INCLUDED in the 50k).
+            // So if Uncovered, we shouldn't pay 5k + 50k. Use Max?
+            // Note: `baseSessionBurden` is the client's share *within* the `baseSessionFee`.
+            // So valid share of coverage = `deduction` * (Burden/Fee ratio)? No.
+
+            // Let's stick to "Deduction is the Voucher Usage".
+            // Voucher Usage covers the fee.
+            // If Usage = 50k. Fee = 50k.
+            // Client contribution inside that 50k is 5k.
+            // So Gov contribution is 45k.
+            // `finalClientCost` in `sessions` table usually means "Amount Client Transfer to Center".
+            // So 5k.
+
+            // If Usage = 0. Fee = 50k.
+            // Client pays 50k.
+
+            // Formula: `finalClientCost` = `(baseSessionFee - deduction)` + `(deduction > 0 ? baseSessionBurden : 0)` ?
+            // If partial deduction? e.g. 25k remaining.
+            // Deduction = 25k.
+            // Uncovered = 25k.
+            // Client pays Uncovered (25k) + Burden on Covered (2.5k)? = 27.5k.
+            // Seems reasonable.
+
+            // Let's use:
+            // `burdenRatio` = `baseSessionBurden` / `baseSessionFee` (approx).
+            // or just `baseSessionBurden` if full coverage.
+
+            // Safe logic: calculated Client Cost = Uncovered Amount + (Covered Amount * Burden/Fee Ratio).
+            // But simpler: `finalClientCost` = `sessionFee` - `(deduction - calculated_burden_for_deduction)`.
+            // calculated_burden_for_deduction = `deduction` * (`baseSessionBurden` / `baseSessionFee`).
+
+            // However, strictly adhering to User:
+            // "20000-20000=180000... 1회당 50000... 본인부담금 5000".
+            // "다소진하고 다 센터에 부담하게끔" -> Exhaust limit (which is 200k).
+
+            // So:
+            // `realGovSupport` = `deduction` - `burden_part`.
+            // `finalClientCost` = `sessionFee` - `realGovSupport`.
+
+            // `burden_part` for `deduction`:
+            // If `deduction` == `baseSessionFee`, `burden_part` = `baseSessionBurden`.
+            // If partial, proportional.
+            const burdenPart = deduction > 0 ? (deduction * (baseSessionBurden / baseSessionFee)) : 0
+            const realGovSupport = deduction - burdenPart
+
+            finalClientCost = (sessionFee - deduction) + burdenPart + extraCost // Wait
+            // `sessionFee` includes `extraCost`? 
+            // `sessionFee` from above block was `baseSessionFee + extraCost`.
+            // `deduction` is from `baseSessionFee`.
+
+            // Let's recalculate accurately here.
+
+            // Final Logic:
+            const coveredAmount = deduction
+            const coveredBurden = Math.floor(coveredAmount * (baseSessionBurden / baseSessionFee))
+            const govSupport = coveredAmount - coveredBurden
+
+            finalClientCost = sessionFee - govSupport
 
             breakdown.push(`----------------`)
             breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
-            breakdown.push(`(실질 바우처 지원: -${realSupport.toLocaleString()}원)`)
+            breakdown.push(`(실질 정부 지원: -${govSupport.toLocaleString()}원)`)
             breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
 
         } else {
