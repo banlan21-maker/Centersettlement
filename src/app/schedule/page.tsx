@@ -28,7 +28,7 @@ export default function SchedulePage() {
 
     // Form State
     const [newTeacherId, setNewTeacherId] = useState('')
-    const [newClientId, setNewClientId] = useState('')
+    const [newClientIds, setNewClientIds] = useState<string[]>([]) // Multi-select
     const [newStartTime, setNewStartTime] = useState('')
     const [newDuration, setNewDuration] = useState('40')
     const [newMemo, setNewMemo] = useState('')
@@ -60,8 +60,16 @@ export default function SchedulePage() {
         const start = `${date}T00:00:00`
         const end = `${date}T23:59:59`
 
+        // Join with schedule_clients
         const { data } = await supabase.from('schedules')
-            .select('*, teachers(name), clients(name)')
+            .select(`
+                *,
+                teachers(name),
+                schedule_clients(
+                    client_id,
+                    clients(name)
+                )
+            `)
             .gte('start_time', start)
             .lte('start_time', end)
 
@@ -69,25 +77,19 @@ export default function SchedulePage() {
     }
 
     const handleCreate = async () => {
-        if (!selectedSlot || !newTeacherId || !newClientId || !newStartTime) return
+        if (!selectedSlot || !newTeacherId || newClientIds.length === 0 || !newStartTime) {
+            toast.error('필수 정보를 모두 입력해주세요.')
+            return
+        }
 
         // Calculate End Time
         const startDateTime = `${date}T${newStartTime}:00`
         const startDate = new Date(startDateTime)
         const endDate = new Date(startDate.getTime() + parseInt(newDuration) * 60000)
-
-        // Adjust for timezone (simplified for local usage)
-        // Note: Supabase stores in UTC. We need to be careful.
-        // For MVP, let's assume the input is local and we store as ISO. 
-        // Ideally we should handle timezone properly.
-
-        // Check for overlaps
-        // Existing Overlap: (Start < NewEnd) AND (End > NewStart)
-        // Adjust for adjacent: (Start < NewEnd) AND (End > NewStart) acts as strict overlap.
-        // If query returns any, we block.
         const startIso = startDate.toISOString()
         const endIso = endDate.toISOString()
 
+        // 1. Room Conflict Check
         const { data: conflicts } = await supabase
             .from('schedules')
             .select('id')
@@ -100,7 +102,7 @@ export default function SchedulePage() {
             return
         }
 
-        // Check Teacher Conflict
+        // 2. Teacher Conflict Check
         const { data: teacherConflicts } = await supabase
             .from('schedules')
             .select('id')
@@ -113,37 +115,68 @@ export default function SchedulePage() {
             return
         }
 
-        // Check Client Conflict
-        const { data: clientConflicts } = await supabase
+        // 3. Client Conflict Check (Loop for each selected client)
+        // This is a bit heavy, but safe. 
+        // We need to check if ANY of the selected clients are in a schedule that overlaps.
+        // The join query is complex. Simplest is to check `schedule_clients` link where schedule overlaps.
+        // "Find schedules overlapping this time range" AND "Have one of newClientIds".
+
+        // Step 3a: Find all overlapping schedules IDs first (regardless of room/teacher)
+        const { data: overlappingScheds } = await supabase
             .from('schedules')
             .select('id')
-            .eq('client_id', newClientId)
             .lt('start_time', endIso)
             .gt('end_time', startIso)
 
-        if (clientConflicts && clientConflicts.length > 0) {
-            toast.error('해당 내담자는 이미 다른 수업이 예약되어 있습니다.')
-            return
+        if (overlappingScheds && overlappingScheds.length > 0) {
+            const overlapIds = overlappingScheds.map(s => s.id)
+            // Step 3b: Check if any of these schedules contain our clients
+            const { data: clientClashes } = await supabase
+                .from('schedule_clients')
+                .select('client_id, clients(name)')
+                .in('schedule_id', overlapIds)
+                .in('client_id', newClientIds)
+
+            if (clientClashes && clientClashes.length > 0) {
+                const names = clientClashes.map((c: any) => c.clients?.name).join(', ')
+                toast.error(`다음 내담자는 이미 다른 수업이 예약되어 있습니다: ${names}`)
+                return
+            }
         }
 
-        const { error } = await supabase.from('schedules').insert({
+        // Insert Schedule
+        const { data: newSchedule, error } = await supabase.from('schedules').insert({
             room_id: selectedSlot.roomId,
             teacher_id: newTeacherId,
-            client_id: newClientId,
+            // client_id: newClientIds[0], // Optional: keep primary client or null
             start_time: startIso,
             end_time: endIso,
             status: 'scheduled',
             memo: newMemo
-        })
+        }).select().single()
 
         if (error) {
             toast.error('예약 실패: ' + error.message)
-        } else {
-            toast.success('예약되었습니다')
-            setIsCreateOpen(false)
-            resetForm()
-            fetchSchedules()
+            return
         }
+
+        // Insert Schedule Clients
+        if (newSchedule) {
+            const clientLinks = newClientIds.map(cid => ({
+                schedule_id: newSchedule.id,
+                client_id: cid
+            }))
+            const { error: linkError } = await supabase.from('schedule_clients').insert(clientLinks)
+            if (linkError) {
+                console.error('Failed to link clients', linkError)
+                toast.error('일부 내담자 연결 실패')
+            }
+        }
+
+        toast.success('예약되었습니다')
+        setIsCreateOpen(false)
+        resetForm()
+        fetchSchedules()
     }
 
     const handleDelete = async () => {
@@ -154,7 +187,8 @@ export default function SchedulePage() {
     }
 
     const handleComplete = () => {
-        // Redirect to Record Page with pre-filled data
+        // Redirect to Record Page
+        // Pre-fill ONLY Teacher, Date, Time. Leave Client empty for user to select.
         if (!selectedSchedule) return
 
         const startTime = new Date(selectedSchedule.start_time)
@@ -163,7 +197,7 @@ export default function SchedulePage() {
 
         const params = new URLSearchParams()
         params.set('teacherId', selectedSchedule.teacher_id)
-        params.set('clientId', selectedSchedule.client_id)
+        // params.set('clientId', selectedSchedule.client_id) // Do NOT set client
         params.set('date', date)
         params.set('time', timeStr)
         params.set('duration', duration.toString())
@@ -173,14 +207,13 @@ export default function SchedulePage() {
 
     const resetForm = () => {
         setNewTeacherId('')
-        setNewClientId('')
+        setNewClientIds([])
         setNewStartTime('')
         setNewDuration('40')
         setNewMemo('')
     }
 
     // Timeline Helper
-    // We assume 09:00 to 22:00
     const startHour = 9
     const endHour = 22
     const hourWidth = 100 // px
@@ -199,6 +232,13 @@ export default function SchedulePage() {
         const e = new Date(endIso)
         const diffMinutes = (e.getTime() - s.getTime()) / 60000
         return (diffMinutes / 60) * hourWidth
+    }
+
+    // Toggle Client in Multi-Select
+    const toggleClient = (cid: string) => {
+        setNewClientIds(prev =>
+            prev.includes(cid) ? prev.filter(id => id !== cid) : [...prev, cid]
+        )
     }
 
     return (
@@ -265,11 +305,8 @@ export default function SchedulePage() {
                                             const x = e.clientX - rect.left
                                             const hourIndex = Math.floor(x / hourWidth)
                                             const clickedHour = startHour + hourIndex
-
-                                            // 30 min snap
                                             const minuteRemainder = (x % hourWidth) / hourWidth
                                             const clickedMinute = minuteRemainder < 0.5 ? '00' : '30'
-
                                             const timeString = `${clickedHour.toString().padStart(2, '0')}:${clickedMinute}`
 
                                             setSelectedSlot({ roomId: room.id, time: timeString })
@@ -279,27 +316,38 @@ export default function SchedulePage() {
                                     ></div>
 
                                     {/* Schedule Blocks */}
-                                    {schedules.filter(s => s.room_id === room.id).map(sch => (
-                                        <div
-                                            key={sch.id}
-                                            className={`
-                                                absolute top-2 bottom-2 rounded px-2 py-1 text-xs cursor-pointer overflow-hidden
-                                                ${sch.status === 'completed' ? 'bg-gray-200 text-gray-500 border-gray-300' : 'bg-blue-100 text-blue-700 border-blue-200 border shadow-sm hover:ring-2 ring-blue-400'}
-                                            `}
-                                            style={{
-                                                left: getPosition(sch.start_time),
-                                                width: getWidth(sch.start_time, sch.end_time),
-                                                zIndex: 10
-                                            }}
-                                            onClick={(e) => {
-                                                e.stopPropagation()
-                                                setSelectedSchedule(sch)
-                                            }}
-                                        >
-                                            <div className="font-bold truncate">{sch.clients?.name}</div>
-                                            <div className="truncate text-[10px] opacity-80">{sch.teachers?.name}</div>
-                                        </div>
-                                    ))}
+                                    {schedules.filter(s => s.room_id === room.id).map(sch => {
+                                        const startTime = new Date(sch.start_time)
+                                        const endTime = new Date(sch.end_time)
+                                        const timeDisplay = `${startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}-${endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`
+
+                                        // Collect Client Names
+                                        const clientNames = sch.schedule_clients?.map((sc: any) => sc.clients?.name).join(', ') || '내담자 없음'
+
+                                        return (
+                                            <div
+                                                key={sch.id}
+                                                className={`
+                                                    absolute top-2 bottom-2 rounded px-2 py-1 text-xs cursor-pointer overflow-hidden leading-tight flex flex-col justify-center
+                                                    ${sch.status === 'completed' ? 'bg-gray-200 text-gray-500 border-gray-300' : 'bg-blue-100 text-blue-700 border-blue-200 border shadow-sm hover:ring-2 ring-blue-400'}
+                                                `}
+                                                style={{
+                                                    left: getPosition(sch.start_time),
+                                                    width: getWidth(sch.start_time, sch.end_time),
+                                                    zIndex: 10
+                                                }}
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    setSelectedSchedule(sch)
+                                                }}
+                                                title={`${timeDisplay} ${sch.teachers?.name} [${clientNames}]`}
+                                            >
+                                                <div className="font-bold truncate text-[10px]">{timeDisplay}</div>
+                                                <div className="font-semibold truncate">{clientNames}</div>
+                                                <div className="truncate text-[10px] opacity-90">{sch.teachers?.name}</div>
+                                            </div>
+                                        )
+                                    })}
                                 </div>
                             </div>
                         ))}
@@ -355,17 +403,23 @@ export default function SchedulePage() {
                         </div>
 
                         <div>
-                            <label className="text-xs font-medium mb-1 block">내담자</label>
-                            <Select value={newClientId} onValueChange={setNewClientId}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="내담자 선택" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {clients.map(c => (
-                                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <label className="text-xs font-medium mb-2 block">내담자 (다중 선택 가능)</label>
+                            <div className="h-40 overflow-y-auto border rounded p-2 bg-slate-50 grid grid-cols-2 gap-2">
+                                {clients.map(c => (
+                                    <div key={c.id} className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            id={`client-${c.id}`}
+                                            checked={newClientIds.includes(c.id)}
+                                            onChange={() => toggleClient(c.id)}
+                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <label htmlFor={`client-${c.id}`} className="text-sm cursor-pointer select-none">
+                                            {c.name}
+                                        </label>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                     <DialogFooter>
@@ -395,7 +449,9 @@ export default function SchedulePage() {
                                 <span className="font-medium">{selectedSchedule.teachers?.name}</span>
 
                                 <span className="text-gray-500">내담자</span>
-                                <span className="font-medium">{selectedSchedule.clients?.name}</span>
+                                <span className="font-medium">
+                                    {selectedSchedule.schedule_clients?.map((sc: any) => sc.clients?.name).join(', ') || '-'}
+                                </span>
 
                                 <span className="text-gray-500">강의실</span>
                                 <span className="font-medium">{rooms.find(r => r.id === selectedSchedule.room_id)?.name}</span>
