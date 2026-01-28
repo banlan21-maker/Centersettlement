@@ -27,7 +27,6 @@ export default function SettingsPage() {
     const [vouchers, setVouchers] = useState<any[]>([])
     const [newVoucherName, setNewVoucherName] = useState('')
     const [newVoucherSupport, setNewVoucherSupport] = useState('')
-    const [newVoucherDefaultFee, setNewVoucherDefaultFee] = useState('')
     const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null)
 
     // Clients State
