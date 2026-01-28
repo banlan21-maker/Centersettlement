@@ -96,7 +96,33 @@ export default function SchedulePage() {
             .gt('end_time', startIso)
 
         if (conflicts && conflicts.length > 0) {
-            toast.error('이미 해당 시간에 예약된 일정이 있습니다.')
+            toast.error('이미 해당 강의실에 예약된 일정이 있습니다.')
+            return
+        }
+
+        // Check Teacher Conflict
+        const { data: teacherConflicts } = await supabase
+            .from('schedules')
+            .select('id')
+            .eq('teacher_id', newTeacherId)
+            .lt('start_time', endIso)
+            .gt('end_time', startIso)
+
+        if (teacherConflicts && teacherConflicts.length > 0) {
+            toast.error('해당 선생님은 이미 다른 수업이 예약되어 있습니다.')
+            return
+        }
+
+        // Check Client Conflict
+        const { data: clientConflicts } = await supabase
+            .from('schedules')
+            .select('id')
+            .eq('client_id', newClientId)
+            .lt('start_time', endIso)
+            .gt('end_time', startIso)
+
+        if (clientConflicts && clientConflicts.length > 0) {
+            toast.error('해당 내담자는 이미 다른 수업이 예약되어 있습니다.')
             return
         }
 
