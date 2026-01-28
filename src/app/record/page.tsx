@@ -166,6 +166,7 @@ function RecordContent() {
 
         let sessionFee = 0
         let isMulti = selectedVouchers.length > 1
+        let feeRemaining = 0
         let totalDeducted = 0
         const voucherUsageMap: Record<string, number> = {}
 
@@ -258,7 +259,7 @@ function RecordContent() {
 
         // 3. Calculate Deduction & Client Cost
         if (selectedVouchers.length > 0 && isMulti) {
-            let feeRemaining = sessionFee
+            feeRemaining = sessionFee
             // Original Deduction Logic for Multi (or Fallback)
             for (const vid of selectedVouchers) {
                 if (feeRemaining <= 0) break // Covered
