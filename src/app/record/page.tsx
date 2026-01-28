@@ -50,7 +50,7 @@ function RecordContent() {
         totalFee: number,
         voucherSupport: number,
         clientCost: number,
-        clientCost: number,
+
         breakdown: string[],
         voucherUsageMap?: Record<string, number>,
         sessionCounts?: Record<string, { current: number, total: number }>
@@ -642,12 +642,12 @@ function RecordContent() {
                                                 <div
                                                     key={v.id}
                                                     className={`
-                                                    px-3 py-1.5 rounded-full text-xs border cursor-pointer transition-colors select-none
-                                                    ${selectedVouchers.includes(v.id)
+                                                px-3 py-1.5 rounded-full text-xs border cursor-pointer transition-colors select-none
+                                                ${selectedVouchers.includes(v.id)
                                                             ? 'bg-primary text-primary-foreground border-primary font-medium'
                                                             : 'bg-white hover:bg-gray-50 text-gray-600'
                                                         }
-                                                `}
+                                            `}
                                                     onClick={() => {
                                                         if (selectedVouchers.includes(v.id)) {
                                                             setSelectedVouchers(selectedVouchers.filter(id => id !== v.id))
@@ -659,12 +659,12 @@ function RecordContent() {
                                                     {v.name}
                                                     {selectedVouchers.includes(v.id) && <span className="ml-1">✓</span>}
                                                     {/* Show count if available in calcResult or filtered? 
-                                                    Ideally we want to show it BEFORE selection if possible, but we need to calc it.
-                                                    Actually, calcResult updates AFTER selection. 
-                                                    If we want to show "2/4" on the badge, we need to fetch counts whenever selectedClient changes.
-                                                    But calculateFee does that.
-                                                    Let's use calcResult.sessionCounts if available for selected ones.
-                                                */}
+                                                Ideally we want to show it BEFORE selection if possible, but we need to calc it.
+                                                Actually, calcResult updates AFTER selection. 
+                                                If we want to show "2/4" on the badge, we need to fetch counts whenever selectedClient changes.
+                                                But calculateFee does that.
+                                                Let's use calcResult.sessionCounts if available for selected ones.
+                                            */}
                                                     {selectedVouchers.includes(v.id) && calcResult?.sessionCounts?.[v.id] && (
                                                         <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${calcResult.sessionCounts[v.id].current > calcResult.sessionCounts[v.id].total
                                                             ? 'bg-red-100 text-red-600'
