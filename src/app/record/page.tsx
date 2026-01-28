@@ -142,6 +142,28 @@ function RecordContent() {
 
         const breakdown: string[] = []
 
+        // Fetch usages early for logic
+        let usages: { vid: string, used: number }[] = []
+        if (selectedVouchers.length > 0) {
+            const startOfMonth = new Date(date)
+            startOfMonth.setDate(1)
+            const startStr = format(startOfMonth, 'yyyy-MM-dd')
+            const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
+            const endStr = format(endOfMonth, 'yyyy-MM-dd')
+
+            usages = await Promise.all(selectedVouchers.map(async vid => {
+                const { data } = await supabase
+                    .from('session_vouchers')
+                    .select('used_amount, sessions!inner(date, client_id)')
+                    .eq('voucher_id', vid)
+                    .eq('sessions.client_id', selectedClient)
+                    .gte('sessions.date', startStr)
+                    .lte('sessions.date', endStr)
+                const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
+                return { vid, used }
+            }))
+        }
+
         let sessionFee = 0
         let isMulti = selectedVouchers.length > 1
 
@@ -237,27 +259,19 @@ function RecordContent() {
         let totalDeducted = 0
         const voucherUsageMap: Record<string, number> = {}
 
-        if (selectedVouchers.length > 0) {
-            // Fetch usage for limits
-            const startOfMonth = new Date(date)
-            startOfMonth.setDate(1)
-            const startStr = format(startOfMonth, 'yyyy-MM-dd')
-            const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
-            const endStr = format(endOfMonth, 'yyyy-MM-dd')
+        let feeRemaining = sessionFee
+        let totalDeducted = 0
+        const voucherUsageMap: Record<string, number> = {}
 
-            // Fetch usage in parallel
-            const usages = await Promise.all(selectedVouchers.map(async vid => {
-                const { data } = await supabase
-                    .from('session_vouchers')
-                    .select('used_amount, sessions!inner(date, client_id)')
-                    .eq('voucher_id', vid)
-                    .eq('sessions.client_id', selectedClient)
-                    .gte('sessions.date', startStr)
-                    .lte('sessions.date', endStr)
-                const used = data?.reduce((sum, item) => sum + (item.used_amount || 0), 0) || 0
-                return { vid, used }
-            }))
+        // For Multi or if we didn't handle it in Single block (Refactor legacy flow if needed, but Single block now handles everything)
+        // If Single block set 'totalDeducted', we assume it's done.
+        // But the code below iterates again? 
+        // We should wrap the below logic in `if (isMulti)` or check if we already processed.
+        // Actually, for Single case, we fully calculated `finalClientCost` and `totalDeducted`.
+        // We should skip the loop below if Single.
 
+        if (selectedVouchers.length > 0 && isMulti) {
+            // Original Deduction Logic for Multi (or Fallback)
             for (const vid of selectedVouchers) {
                 if (feeRemaining <= 0) break // Covered
 
