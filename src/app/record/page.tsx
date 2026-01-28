@@ -518,214 +518,215 @@ function RecordContent() {
                 breakdown.push(`(실질 정부 지원: -${govSupport.toLocaleString()}원)`)
                 breakdown.push(`최종 본인부담금: ${finalClientCost.toLocaleString()}원`)
 
-            } else {
-                // General
-                finalClientCost = sessionFee
             }
-
-            setCalcResult({
-                totalFee: sessionFee,
-                voucherSupport: totalGovSupport, // Use the calculated strict Gov Support
-                clientCost: finalClientCost,
-                breakdown,
-                voucherUsageMap,
-                sessionCounts: usages.reduce((acc, curr) => {
-                    // Find monthly limit
-                    const v = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === curr.vid)
-                    acc[curr.vid] = { current: curr.count + 1, total: v?.monthly_session_count || 4 }
-                    return acc
-                }, {} as Record<string, { current: number, total: number }>)
-            })
+        } else {
+            // General
+            finalClientCost = sessionFee
         }
 
-        const handleSubmit = async () => {
-            if (!selectedTeacher || !selectedClient || !date || !calcResult) return
+        setCalcResult({
+            totalFee: sessionFee,
+            voucherSupport: totalGovSupport, // Use the calculated strict Gov Support
+            clientCost: finalClientCost,
+            breakdown,
+            voucherUsageMap,
+            sessionCounts: usages.reduce((acc, curr) => {
+                // Find monthly limit
+                const v = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === curr.vid)
+                acc[curr.vid] = { current: curr.count + 1, total: v?.monthly_session_count || 4 }
+                return acc
+            }, {} as Record<string, { current: number, total: number }>)
+        })
+    }
 
-            const { error: sessionError, data: session } = await supabase.from('sessions').insert({
-                date: `${date} ${startTime}`,
-                teacher_id: selectedTeacher,
-                client_id: selectedClient,
-                duration_minutes: parseInt(duration),
-                total_fee: calcResult.totalFee,
-                total_support: calcResult.voucherSupport,
-                final_client_cost: calcResult.clientCost
-            }).select().single()
+    const handleSubmit = async () => {
+        if (!selectedTeacher || !selectedClient || !date || !calcResult) return
 
-            if (sessionError) {
-                toast.error('저장 실패: ' + sessionError.message)
-                return
-            }
+        const { error: sessionError, data: session } = await supabase.from('sessions').insert({
+            date: `${date} ${startTime}`,
+            teacher_id: selectedTeacher,
+            client_id: selectedClient,
+            duration_minutes: parseInt(duration),
+            total_fee: calcResult.totalFee,
+            total_support: calcResult.voucherSupport,
+            final_client_cost: calcResult.clientCost
+        }).select().single()
 
-            if (selectedVouchers.length > 0) {
-                const voucherLinks = selectedVouchers.map(vid => ({
-                    session_id: session.id,
-                    voucher_id: vid,
-                    used_amount: (calcResult as any).voucherUsageMap?.[vid] || 0
-                }))
-                await supabase.from('session_vouchers').insert(voucherLinks)
-            }
-
-            toast.success('수업 기록 저장 완료')
-            // router.push('/report') // Removed as per user request
+        if (sessionError) {
+            toast.error('저장 실패: ' + sessionError.message)
+            return
         }
 
-        return (
-            <div className="p-4 max-w-lg mx-auto pb-24">
-                <h1 className="text-2xl font-bold mb-4">수업입력</h1>
+        if (selectedVouchers.length > 0) {
+            const voucherLinks = selectedVouchers.map(vid => ({
+                session_id: session.id,
+                voucher_id: vid,
+                used_amount: (calcResult as any).voucherUsageMap?.[vid] || 0
+            }))
+            await supabase.from('session_vouchers').insert(voucherLinks)
+        }
 
-                <div className="space-y-4">
-                    <Card>
-                        <CardHeader className="py-3">
-                            <CardTitle className="text-sm font-medium">수업 정보 입력</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4 pb-4">
-                            {/* Date & Time Row */}
-                            <div className="flex gap-2">
-                                <div className="flex-1">
-                                    <label className="text-xs text-gray-500 mb-1 block">일자</label>
-                                    <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-9" />
-                                </div>
-                                <div className="w-1/3">
-                                    <label className="text-xs text-gray-500 mb-1 block">시간</label>
-                                    <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="h-9" />
-                                </div>
+        toast.success('수업 기록 저장 완료')
+        // router.push('/report') // Removed as per user request
+    }
+
+    return (
+        <div className="p-4 max-w-lg mx-auto pb-24">
+            <h1 className="text-2xl font-bold mb-4">수업입력</h1>
+
+            <div className="space-y-4">
+                <Card>
+                    <CardHeader className="py-3">
+                        <CardTitle className="text-sm font-medium">수업 정보 입력</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pb-4">
+                        {/* Date & Time Row */}
+                        <div className="flex gap-2">
+                            <div className="flex-1">
+                                <label className="text-xs text-gray-500 mb-1 block">일자</label>
+                                <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-9" />
                             </div>
+                            <div className="w-1/3">
+                                <label className="text-xs text-gray-500 mb-1 block">시간</label>
+                                <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="h-9" />
+                            </div>
+                        </div>
 
-                            {/* Duration Select */}
+                        {/* Duration Select */}
+                        <div>
+                            <label className="text-xs text-gray-500 mb-1 block">수업 시간 (분)</label>
+                            <Select value={duration} onValueChange={setDuration}>
+                                <SelectTrigger className="h-9">
+                                    <SelectValue placeholder="시간 선택" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="30">30분</SelectItem>
+                                    <SelectItem value="40">40분 (기본)</SelectItem>
+                                    <SelectItem value="50">50분</SelectItem>
+                                    <SelectItem value="60">60분</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Teacher & Client Row */}
+                        <div className="grid grid-cols-2 gap-2">
                             <div>
-                                <label className="text-xs text-gray-500 mb-1 block">수업 시간 (분)</label>
-                                <Select value={duration} onValueChange={setDuration}>
+                                <label className="text-xs text-gray-500 mb-1 block">담당 선생님</label>
+                                <Select value={selectedTeacher} onValueChange={setSelectedTeacher}>
                                     <SelectTrigger className="h-9">
-                                        <SelectValue placeholder="시간 선택" />
+                                        <SelectValue placeholder="선생님" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="30">30분</SelectItem>
-                                        <SelectItem value="40">40분 (기본)</SelectItem>
-                                        <SelectItem value="50">50분</SelectItem>
-                                        <SelectItem value="60">60분</SelectItem>
+                                        {teachers.map(t => (
+                                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             </div>
-
-                            {/* Teacher & Client Row */}
-                            <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                    <label className="text-xs text-gray-500 mb-1 block">담당 선생님</label>
-                                    <Select value={selectedTeacher} onValueChange={setSelectedTeacher}>
-                                        <SelectTrigger className="h-9">
-                                            <SelectValue placeholder="선생님" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {teachers.map(t => (
-                                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div>
-                                    <label className="text-xs text-gray-500 mb-1 block">내담자</label>
-                                    <Select value={selectedClient} onValueChange={setSelectedClient} disabled={!selectedTeacher}>
-                                        <SelectTrigger className="h-9">
-                                            <SelectValue placeholder={!selectedTeacher ? "-" : "내담자"} />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {filteredClients.map(c => (
-                                                <SelectItem key={c.id} value={c.id}>
-                                                    {c.name} {c.birth_date && `(${c.birth_date})`}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">내담자</label>
+                                <Select value={selectedClient} onValueChange={setSelectedClient} disabled={!selectedTeacher}>
+                                    <SelectTrigger className="h-9">
+                                        <SelectValue placeholder={!selectedTeacher ? "-" : "내담자"} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {filteredClients.map(c => (
+                                            <SelectItem key={c.id} value={c.id}>
+                                                {c.name} {c.birth_date && `(${c.birth_date})`}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
+                        </div>
 
-                            {/* Multi-Voucher Selection */}
-                            {selectedClient && (
-                                <div className="pt-2 border-t mt-2">
-                                    <label className="text-xs font-medium mb-2 block">적용 바우처 (다중 선택 가능)</label>
-                                    {filteredVouchers.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2">
-                                            {filteredVouchers.map(v => (
-                                                <div
-                                                    key={v.id}
-                                                    className={`
+                        {/* Multi-Voucher Selection */}
+                        {selectedClient && (
+                            <div className="pt-2 border-t mt-2">
+                                <label className="text-xs font-medium mb-2 block">적용 바우처 (다중 선택 가능)</label>
+                                {filteredVouchers.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        {filteredVouchers.map(v => (
+                                            <div
+                                                key={v.id}
+                                                className={`
                                                 px-3 py-1.5 rounded-full text-xs border cursor-pointer transition-colors select-none
                                                 ${selectedVouchers.includes(v.id)
-                                                            ? 'bg-primary text-primary-foreground border-primary font-medium'
-                                                            : 'bg-white hover:bg-gray-50 text-gray-600'
-                                                        }
+                                                        ? 'bg-primary text-primary-foreground border-primary font-medium'
+                                                        : 'bg-white hover:bg-gray-50 text-gray-600'
+                                                    }
                                             `}
-                                                    onClick={() => {
-                                                        if (selectedVouchers.includes(v.id)) {
-                                                            setSelectedVouchers(selectedVouchers.filter(id => id !== v.id))
-                                                        } else {
-                                                            setSelectedVouchers([...selectedVouchers, v.id])
-                                                        }
-                                                    }}
-                                                >
-                                                    {v.name}
-                                                    {selectedVouchers.includes(v.id) && <span className="ml-1">✓</span>}
-                                                    {/* Show count if available in calcResult or filtered? 
+                                                onClick={() => {
+                                                    if (selectedVouchers.includes(v.id)) {
+                                                        setSelectedVouchers(selectedVouchers.filter(id => id !== v.id))
+                                                    } else {
+                                                        setSelectedVouchers([...selectedVouchers, v.id])
+                                                    }
+                                                }}
+                                            >
+                                                {v.name}
+                                                {selectedVouchers.includes(v.id) && <span className="ml-1">✓</span>}
+                                                {/* Show count if available in calcResult or filtered? 
                                                 Ideally we want to show it BEFORE selection if possible, but we need to calc it.
                                                 Actually, calcResult updates AFTER selection. 
                                                 If we want to show "2/4" on the badge, we need to fetch counts whenever selectedClient changes.
                                                 But calculateFee does that.
                                                 Let's use calcResult.sessionCounts if available for selected ones.
                                             */}
-                                                    {selectedVouchers.includes(v.id) && calcResult?.sessionCounts?.[v.id] && (
-                                                        <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${calcResult.sessionCounts[v.id].current > calcResult.sessionCounts[v.id].total
-                                                            ? 'bg-red-100 text-red-600'
-                                                            : 'bg-primary-foreground/20'
-                                                            }`}>
-                                                            {calcResult.sessionCounts[v.id].current} / {calcResult.sessionCounts[v.id].total}회
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
+                                                {selectedVouchers.includes(v.id) && calcResult?.sessionCounts?.[v.id] && (
+                                                    <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${calcResult.sessionCounts[v.id].current > calcResult.sessionCounts[v.id].total
+                                                        ? 'bg-red-100 text-red-600'
+                                                        : 'bg-primary-foreground/20'
+                                                        }`}>
+                                                        {calcResult.sessionCounts[v.id].current} / {calcResult.sessionCounts[v.id].total}회
+                                                    </span>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-gray-400">적용 가능한 바우처가 없습니다.</p>
+                                )}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* Calculation Result */}
+                {calcResult && (
+                    <Card className="bg-slate-50 border-slate-200">
+                        <CardHeader className="py-2 min-h-[auto]">
+                            <CardTitle className="text-sm font-medium text-slate-700">예상 결제 내역</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-1 pb-3">
+                            {calcResult.breakdown.map((line, idx) => (
+                                <div key={idx} className={`text-xs flex justify-between ${line.includes('최종') ? 'font-bold text-sm mt-2 pt-2 border-t border-slate-300 text-slate-900' : 'text-slate-600'} ${line.includes('---') ? 'font-semibold text-slate-800 mt-1' : ''}`}>
+                                    {line.includes(':') ? (
+                                        <>
+                                            <span>{line.split(':')[0]}</span>
+                                            <span>{line.split(':')[1]}</span>
+                                        </>
                                     ) : (
-                                        <p className="text-xs text-gray-400">적용 가능한 바우처가 없습니다.</p>
+                                        <span className={line.includes('⚠️') ? 'text-red-500 font-medium' : ''}>{line}</span>
                                     )}
                                 </div>
-                            )}
+                            ))}
                         </CardContent>
                     </Card>
+                )}
 
-                    {/* Calculation Result */}
-                    {calcResult && (
-                        <Card className="bg-slate-50 border-slate-200">
-                            <CardHeader className="py-2 min-h-[auto]">
-                                <CardTitle className="text-sm font-medium text-slate-700">예상 결제 내역</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-1 pb-3">
-                                {calcResult.breakdown.map((line, idx) => (
-                                    <div key={idx} className={`text-xs flex justify-between ${line.includes('최종') ? 'font-bold text-sm mt-2 pt-2 border-t border-slate-300 text-slate-900' : 'text-slate-600'} ${line.includes('---') ? 'font-semibold text-slate-800 mt-1' : ''}`}>
-                                        {line.includes(':') ? (
-                                            <>
-                                                <span>{line.split(':')[0]}</span>
-                                                <span>{line.split(':')[1]}</span>
-                                            </>
-                                        ) : (
-                                            <span className={line.includes('⚠️') ? 'text-red-500 font-medium' : ''}>{line}</span>
-                                        )}
-                                    </div>
-                                ))}
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    <Button className="w-full h-11 text-base font-semibold" onClick={handleSubmit} disabled={!calcResult}>
-                        기록 저장하기
-                    </Button>
-                </div>
+                <Button className="w-full h-11 text-base font-semibold" onClick={handleSubmit} disabled={!calcResult}>
+                    기록 저장하기
+                </Button>
             </div>
-        )
-    }
+        </div>
+    )
+}
 
-    export default function RecordPage() {
-        return (
-            <Suspense fallback={<div className="p-4 text-center">로딩중...</div>}>
-                <RecordContent />
-            </Suspense>
-        )
-    }
+export default function RecordPage() {
+    return (
+        <Suspense fallback={<div className="p-4 text-center">로딩중...</div>}>
+            <RecordContent />
+        </Suspense>
+    )
+}
