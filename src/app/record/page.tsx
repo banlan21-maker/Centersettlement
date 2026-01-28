@@ -185,6 +185,7 @@ function RecordContent() {
         let feeRemaining = 0
         let totalDeducted = 0
         let totalGovSupport = 0
+        let finalClientCost = 0
         const voucherUsageMap: Record<string, number> = {}
 
         // 2. Determine Session Fee Logic
@@ -475,7 +476,7 @@ function RecordContent() {
         }
 
         // 4. Final Client Cost Calculation
-        let finalClientCost = 0
+        // let finalClientCost = 0 // Hoisted
         if (isMulti) {
             // Multi: Client pays whatever is NOT covered by limits
             finalClientCost = feeRemaining
@@ -674,8 +675,22 @@ function RecordContent() {
             clientCost: finalClientCost,
             breakdown,
             voucherUsageMap,
-            sessionCounts: usages.reduce((acc, curr) => {
-                // Find monthly limit
+            sessionCounts: isMulti ? selectedVouchers.reduce((acc, vid) => {
+                // Pooled Display: Show Total Used / Total Pooled Count for clear visibility
+                let totalC = 0
+                let totalU = 0
+                for (const svid of selectedVouchers) {
+                    const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === svid)
+                    const u = usages.find(use => use.vid === svid)
+                    totalC += (cv?.monthly_session_count || 4)
+                    totalU += (u?.count || 0)
+                }
+                // Current session is 1 more than already used
+                const current = totalU + 1
+                acc[vid] = { current, total: totalC }
+                return acc
+            }, {} as Record<string, { current: number, total: number }>) : usages.reduce((acc, curr) => {
+                // Single/Individual Logic
                 const v = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === curr.vid)
                 acc[curr.vid] = { current: curr.count + 1, total: v?.monthly_session_count || 4 }
                 return acc
