@@ -17,8 +17,7 @@ create table if not exists vouchers (
   name text not null,
   support_amount integer default 0,
   client_copay integer default 0, -- Legacy
-  default_fee integer default 0, -- Voucher-specific session fee
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+    created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
 -- Clients Table

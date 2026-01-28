@@ -168,6 +168,10 @@ function RecordContent() {
         let isMulti = selectedVouchers.length > 1
         let feeRemaining = 0
         let totalDeducted = 0
+        let isMulti = selectedVouchers.length > 1
+        let feeRemaining = 0
+        let totalDeducted = 0
+        let totalGovSupport = 0
         const voucherUsageMap: Record<string, number> = {}
 
         // 2. Determine Session Fee Logic
@@ -274,12 +278,42 @@ function RecordContent() {
                 // Deduct from this voucher
                 const deduction = Math.min(feeRemaining, remainingLimit)
 
+                // Calculate Gov Portion for this deduction
+                // Deduction is from "Total Pot" (Gov + Burden).
+                // We need to find how much of this deduction is Burden.
+                // Ratio: burden / (support + burden)? No, monthlySupportTotal includes burden.
+                // Gov Portion = deduction * ( (monthlySupport - burden) / monthlySupport )? 
+
+                // Let's get the ratios from monthly data
+                const mTotal = voucher?.support_amount || 0
+                // We need client specific burden for this voucher? 
+                // Wait, `selectedVouchers` loop doesn't easily give us the client's burden without finding `clientVoucher` again.
+                // We should fetch client vouchers map earlier or find it here.
+                const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === vid)
+                const mCount = cv?.monthly_session_count || 4
+                const mBurden = cv?.monthly_personal_burden || 0
+
+                // Per session amounts
+                const sTotal = Math.floor(mTotal / mCount)
+                const sBurden = Math.floor(mBurden / mCount)
+
+                // If sTotal is 0 (edge case), ratio is 0.
+                let burdenRatio = 0
+                if (sTotal > 0) {
+                    burdenRatio = sBurden / sTotal
+                }
+
+                const burdenPart = Math.floor(deduction * burdenRatio)
+                const govPart = deduction - burdenPart
+
                 voucherUsageMap[vid] = deduction
                 feeRemaining -= deduction
                 totalDeducted += deduction
+                totalGovSupport += govPart
 
                 breakdown.push(`--- ${voucher?.name} ---`)
                 breakdown.push(`잔여 한도: ${remainingLimit.toLocaleString()} / 차감: -${deduction.toLocaleString()}`)
+                breakdown.push(`(정부지원: ${govPart.toLocaleString()} / 본인부담차감: ${burdenPart.toLocaleString()})`)
             }
         }
 
@@ -434,6 +468,8 @@ function RecordContent() {
             const coveredBurden = Math.floor(coveredAmount * (baseSessionBurden / baseSessionFee))
             const govSupport = coveredAmount - coveredBurden
 
+            totalGovSupport = govSupport // Set for Single case
+
             finalClientCost = sessionFee - govSupport
 
             breakdown.push(`----------------`)
@@ -448,7 +484,7 @@ function RecordContent() {
 
         setCalcResult({
             totalFee: sessionFee,
-            voucherSupport: isMulti ? totalDeducted : Math.max(0, totalDeducted - (clientVouchers.find(cv => cv.voucher_id === selectedVouchers[0])?.copay || 0)),
+            voucherSupport: totalGovSupport, // Use the calculated strict Gov Support
             clientCost: finalClientCost,
             breakdown,
             voucherUsageMap

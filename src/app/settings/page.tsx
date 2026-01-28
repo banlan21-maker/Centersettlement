@@ -40,7 +40,6 @@ export default function SettingsPage() {
         const { error } = await supabase.from('vouchers').insert({
             name: newVoucherName,
             support_amount: parseInt(newVoucherSupport) || 0,
-            default_fee: parseInt(newVoucherDefaultFee) || 0,
             client_copay: 0
         })
         if (error) toast.error('실패: ' + error.message)
@@ -55,8 +54,7 @@ export default function SettingsPage() {
         if (!editingVoucherId || !newVoucherName) return
         const { error } = await supabase.from('vouchers').update({
             name: newVoucherName,
-            support_amount: parseInt(newVoucherSupport) || 0,
-            default_fee: parseInt(newVoucherDefaultFee) || 0
+            support_amount: parseInt(newVoucherSupport) || 0
         }).eq('id', editingVoucherId)
 
         if (error) toast.error('수정 실패: ' + error.message)
@@ -71,7 +69,6 @@ export default function SettingsPage() {
         setEditingVoucherId(v.id)
         setNewVoucherName(v.name)
         setNewVoucherSupport(v.support_amount?.toString() || '')
-        setNewVoucherDefaultFee(v.default_fee?.toString() || '')
         window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
@@ -79,7 +76,6 @@ export default function SettingsPage() {
         setEditingVoucherId(null)
         setNewVoucherName('')
         setNewVoucherSupport('')
-        setNewVoucherDefaultFee('')
     }
 
     const deleteVoucher = async (id: string) => {
@@ -613,7 +609,6 @@ export default function SettingsPage() {
                         <CardContent className="space-y-2">
                             <Input placeholder="바우처명" value={newVoucherName} onChange={e => setNewVoucherName(e.target.value)} />
                             <Input placeholder="월 지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
-                            <Input placeholder="1회 차감액(지원금 기준) (원)" type="number" value={newVoucherDefaultFee} onChange={e => setNewVoucherDefaultFee(e.target.value)} />
                             <Button onClick={editingVoucherId ? updateVoucher : addVoucher} className="w-full">
                                 {editingVoucherId ? '수정 완료' : '추가'}
                             </Button>
@@ -627,9 +622,6 @@ export default function SettingsPage() {
                                     <div className="font-medium">{v.name}</div>
                                     <div className="text-sm text-gray-500">
                                         월 {v.support_amount?.toLocaleString()}원
-                                        <span className="ml-2 text-blue-600">
-                                            (1회 {v.default_fee?.toLocaleString()}원 차감)
-                                        </span>
                                     </div>
                                 </div>
                                 <div className="flex gap-1">
