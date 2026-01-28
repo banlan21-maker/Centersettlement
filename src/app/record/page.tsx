@@ -166,6 +166,8 @@ function RecordContent() {
 
         let sessionFee = 0
         let isMulti = selectedVouchers.length > 1
+        let totalDeducted = 0
+        const voucherUsageMap: Record<string, number> = {}
 
         // 2. Determine Session Fee Logic
         if (isMulti) {
@@ -255,22 +257,8 @@ function RecordContent() {
 
 
         // 3. Calculate Deduction & Client Cost
-        let feeRemaining = sessionFee
-        let totalDeducted = 0
-        const voucherUsageMap: Record<string, number> = {}
-
-        let feeRemaining = sessionFee
-        let totalDeducted = 0
-        const voucherUsageMap: Record<string, number> = {}
-
-        // For Multi or if we didn't handle it in Single block (Refactor legacy flow if needed, but Single block now handles everything)
-        // If Single block set 'totalDeducted', we assume it's done.
-        // But the code below iterates again? 
-        // We should wrap the below logic in `if (isMulti)` or check if we already processed.
-        // Actually, for Single case, we fully calculated `finalClientCost` and `totalDeducted`.
-        // We should skip the loop below if Single.
-
         if (selectedVouchers.length > 0 && isMulti) {
+            let feeRemaining = sessionFee
             // Original Deduction Logic for Multi (or Fallback)
             for (const vid of selectedVouchers) {
                 if (feeRemaining <= 0) break // Covered
