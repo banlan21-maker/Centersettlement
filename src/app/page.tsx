@@ -71,6 +71,11 @@ export default function Home() {
       <div className="mt-8 p-4 bg-slate-100 rounded-lg text-sm text-gray-500">
         <p>💡 Tip: 수업료 및 센터 정보는 [기초 데이터 관리] 메뉴에서 언제든지 수정할 수 있습니다.</p>
       </div>
+
+      <div className="mt-8 text-center text-xs text-gray-400 space-y-1">
+        <p>v1.01</p>
+        <p>by.banlan</p>
+      </div>
     </div>
   )
 }
