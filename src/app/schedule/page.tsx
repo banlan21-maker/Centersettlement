@@ -81,12 +81,31 @@ export default function SchedulePage() {
         // For MVP, let's assume the input is local and we store as ISO. 
         // Ideally we should handle timezone properly.
 
+        // Check for overlaps
+        // Existing Overlap: (Start < NewEnd) AND (End > NewStart)
+        // Adjust for adjacent: (Start < NewEnd) AND (End > NewStart) acts as strict overlap.
+        // If query returns any, we block.
+        const startIso = startDate.toISOString()
+        const endIso = endDate.toISOString()
+
+        const { data: conflicts } = await supabase
+            .from('schedules')
+            .select('id')
+            .eq('room_id', selectedSlot.roomId)
+            .lt('start_time', endIso)
+            .gt('end_time', startIso)
+
+        if (conflicts && conflicts.length > 0) {
+            toast.error('이미 해당 시간에 예약된 일정이 있습니다.')
+            return
+        }
+
         const { error } = await supabase.from('schedules').insert({
             room_id: selectedSlot.roomId,
             teacher_id: newTeacherId,
             client_id: newClientId,
-            start_time: startDate.toISOString(),
-            end_time: endDate.toISOString(),
+            start_time: startIso,
+            end_time: endIso,
             status: 'scheduled',
             memo: newMemo
         })
