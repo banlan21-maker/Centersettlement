@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { PlusCircle, Settings, FileBarChart } from 'lucide-react'
+import { PlusCircle, Settings, FileBarChart, ClipboardList } from 'lucide-react'
 
 export default function Home() {
   const [centerName, setCenterName] = useState('센터')
@@ -38,6 +38,21 @@ export default function Home() {
               </CardTitle>
               <CardDescription className="text-primary-foreground/80">
                 오늘 진행한 수업을 바로 입력하세요.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </Link>
+
+        {/* Quick Action: Sessions Info */}
+        <Link href="/sessions-info">
+          <Card className="hover:bg-slate-50 transition-colors cursor-pointer">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <ClipboardList className="mr-2 h-5 w-5 text-green-600" />
+                수업횟수 및 보강 정보
+              </CardTitle>
+              <CardDescription className="text-muted-foreground">
+                내담자별 수업 횟수, 남은 횟수, 다음 달 이월 현황을 확인하세요.
               </CardDescription>
             </CardHeader>
           </Card>

@@ -40,7 +40,7 @@ export default function ReportPage() {
             .select(`
                 *,
                 teachers (name, commission_rate),
-                clients (name),
+                clients (name, end_date),
                 session_vouchers (
                     vouchers (name)
                 )
@@ -60,6 +60,9 @@ export default function ReportPage() {
             fetchData()
         }
     }
+
+    // 내담자 청구금액: 월 합산 후 천원 단위 반올림 (129,996 → 130,000)
+    const roundBillingAmount = (n: number) => Math.round(n / 1000) * 1000
 
     const calculateRow = (s: any) => {
         const totalRevenue = (s.total_support || 0) + (s.final_client_cost || 0)
@@ -87,6 +90,7 @@ export default function ReportPage() {
         end.setHours(23, 59, 59, 999)
 
         return sessions.filter(s => {
+            if (s.clients?.end_date) return false
             const sessionDate = parseISO(s.date)
             return isWithinInterval(sessionDate, { start, end })
         })
@@ -243,7 +247,7 @@ export default function ReportPage() {
                 </Card>
                 <Card>
                     <CardHeader className="p-4 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">내담자 청구액</CardTitle></CardHeader>
-                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold">{summary.clientCost.toLocaleString()}원</div></CardContent>
+                    <CardContent className="p-4 pt-0"><div className="text-lg font-bold">{roundBillingAmount(summary.clientCost).toLocaleString()}원</div></CardContent>
                 </Card>
             </div>
 
@@ -384,7 +388,7 @@ export default function ReportPage() {
                                         <TableRow key={c.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSelectedClientId(c.id)}>
                                             <TableCell className="font-medium underline decoration-dotted underline-offset-4">{c.name}</TableCell>
                                             <TableCell className="text-right">{c.sessionCount}회</TableCell>
-                                            <TableCell className="text-right font-bold text-lg">{c.totalCopay.toLocaleString()}원</TableCell>
+                                            <TableCell className="text-right font-bold text-lg">{roundBillingAmount(c.totalCopay).toLocaleString()}원</TableCell>
                                             <TableCell><ChevronRight className="w-4 h-4 text-gray-400" /></TableCell>
                                         </TableRow>
                                     ))}
@@ -479,7 +483,7 @@ export default function ReportPage() {
                                     })}
                                     <TableRow className="bg-slate-50 font-bold">
                                         <TableCell colSpan={3} className="text-right">합계</TableCell>
-                                        <TableCell className="text-right text-lg">{selectedClientData.totalCopay.toLocaleString()}</TableCell>
+                                        <TableCell className="text-right text-lg">{roundBillingAmount(selectedClientData.totalCopay).toLocaleString()}원</TableCell>
                                     </TableRow>
                                 </TableBody>
                             </Table>

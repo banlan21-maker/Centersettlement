@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
-import { Pencil, Trash2, X, Check, Search } from 'lucide-react'
+import { Pencil, Trash2, X, Check, Search, Download, Upload } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export default function SettingsPage() {
@@ -27,7 +28,13 @@ export default function SettingsPage() {
     const [vouchers, setVouchers] = useState<any[]>([])
     const [newVoucherName, setNewVoucherName] = useState('')
     const [newVoucherSupport, setNewVoucherSupport] = useState('')
+    const [newVoucherCategory, setNewVoucherCategory] = useState<string>('government')
     const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null)
+
+    const VOUCHER_CATEGORIES = [
+        { value: 'education_office', label: '교육청' },
+        { value: 'government', label: '정부' }
+    ] as const
 
     // Clients State
     const [clients, setClients] = useState<any[]>([])
@@ -40,10 +47,16 @@ export default function SettingsPage() {
         const { error } = await supabase.from('vouchers').insert({
             name: newVoucherName,
             support_amount: parseInt(newVoucherSupport) || 0,
-            client_copay: 0
+            client_copay: 0,
+            category: newVoucherCategory
         })
-        if (error) toast.error('실패: ' + error.message)
-        else {
+        if (error) {
+            if (error.message?.includes('category')) {
+                toast.error('관리처 저장 실패: Supabase SQL Editor에서 "alter table vouchers add column if not exists category text default \'government\';" 실행 후 "NOTIFY pgrst, \'reload schema\';" 실행해주세요.')
+            } else {
+                toast.error('실패: ' + error.message)
+            }
+        } else {
             toast.success('바우처 추가 완료')
             resetVoucherForm()
             fetchData()
@@ -54,11 +67,16 @@ export default function SettingsPage() {
         if (!editingVoucherId || !newVoucherName) return
         const { error } = await supabase.from('vouchers').update({
             name: newVoucherName,
-            support_amount: parseInt(newVoucherSupport) || 0
+            support_amount: parseInt(newVoucherSupport) || 0,
+            category: newVoucherCategory
         }).eq('id', editingVoucherId)
-
-        if (error) toast.error('수정 실패: ' + error.message)
-        else {
+        if (error) {
+            if (error.message?.includes('category')) {
+                toast.error('관리처 저장 실패: Supabase SQL Editor에서 "alter table vouchers add column if not exists category text default \'government\';" 실행 후 "NOTIFY pgrst, \'reload schema\';" 실행해주세요.')
+            } else {
+                toast.error('수정 실패: ' + error.message)
+            }
+        } else {
             toast.success('바우처 정보 수정 완료')
             resetVoucherForm()
             fetchData()
@@ -69,6 +87,7 @@ export default function SettingsPage() {
         setEditingVoucherId(v.id)
         setNewVoucherName(v.name)
         setNewVoucherSupport(v.support_amount?.toString() || '')
+        setNewVoucherCategory(v.category || 'government')
         window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
@@ -76,6 +95,7 @@ export default function SettingsPage() {
         setEditingVoucherId(null)
         setNewVoucherName('')
         setNewVoucherSupport('')
+        setNewVoucherCategory('government')
     }
 
     const deleteVoucher = async (id: string) => {
@@ -91,6 +111,8 @@ export default function SettingsPage() {
     const [newClientName, setNewClientName] = useState('')
     const [newClientBirthDate, setNewClientBirthDate] = useState('')
     const [newClientPhone, setNewClientPhone] = useState('')
+    const [newClientRegDate, setNewClientRegDate] = useState('')
+    const [newClientEndDate, setNewClientEndDate] = useState('')
     const [clientVoucherSelections, setClientVoucherSelections] = useState<Record<string, { selected: boolean, count: string, burden: string }>>({})
     const [editingClientId, setEditingClientId] = useState<string | null>(null)
 
@@ -336,10 +358,13 @@ export default function SettingsPage() {
     const addClient = async () => {
         if (!newClientName) return
 
+        const regDate = newClientRegDate || new Date().toISOString().slice(0, 10)
         const { data: newClient, error: clientError } = await supabase.from('clients').insert({
             name: newClientName,
             birth_date: newClientBirthDate || null,
-            phone_number: newClientPhone || null
+            phone_number: newClientPhone || null,
+            registration_date: regDate,
+            end_date: newClientEndDate || null
         }).select().single()
 
         if (clientError) {
@@ -356,15 +381,22 @@ export default function SettingsPage() {
     const updateClient = async () => {
         if (!editingClientId || !newClientName) return
 
+        const endDateVal = newClientEndDate || null
         const { error: clientError } = await supabase.from('clients').update({
             name: newClientName,
             birth_date: newClientBirthDate || null,
-            phone_number: newClientPhone || null
+            phone_number: newClientPhone || null,
+            registration_date: newClientRegDate || null,
+            end_date: endDateVal
         }).eq('id', editingClientId)
 
         if (clientError) {
             toast.error('수정 실패: ' + clientError.message)
             return
+        }
+
+        if (endDateVal) {
+            await supabase.from('teacher_clients').delete().eq('client_id', editingClientId)
         }
 
         // Delete existing vouchers and re-add
@@ -398,6 +430,8 @@ export default function SettingsPage() {
         setNewClientName(c.name)
         setNewClientBirthDate(c.birth_date || '')
         setNewClientPhone(c.phone_number || '')
+        setNewClientRegDate(c.registration_date || '')
+        setNewClientEndDate(c.end_date || '')
 
         // Populate vouchers
         const selections: Record<string, { selected: boolean, count: string, burden: string }> = {}
@@ -422,12 +456,194 @@ export default function SettingsPage() {
         setNewClientName('')
         setNewClientBirthDate('')
         setNewClientPhone('')
+        setNewClientRegDate('')
+        setNewClientEndDate('')
 
         const initialSelections: Record<string, { selected: boolean, count: string, burden: string }> = {}
         vouchers.forEach(voucher => {
             initialSelections[voucher.id] = { selected: false, count: '4', burden: '0' }
         })
         setClientVoucherSelections(initialSelections)
+    }
+
+    const exportClientsToExcel = async () => {
+        try {
+            const { data: tcData } = await supabase.from('teacher_clients').select('teacher_id, client_id')
+            const teacherMap = new Map<string, string>()
+            teachers.forEach(t => teacherMap.set(t.id, t.name))
+
+            const sheet1 = [['이름', '생년월일', '전화번호', '등록일', '종료일']]
+            clients.forEach(c => {
+                sheet1.push([
+                    c.name || '',
+                    c.birth_date || '',
+                    c.phone_number || '',
+                    c.registration_date || '',
+                    c.end_date || ''
+                ])
+            })
+
+            const sheet2 = [['내담자명', '바우처명', '월횟수', '월본인부담금']]
+            clients.forEach(c => {
+                (c.client_vouchers || []).forEach((cv: any) => {
+                    sheet2.push([
+                        c.name || '',
+                        cv.vouchers?.name || '',
+                        cv.monthly_session_count ?? 4,
+                        cv.monthly_personal_burden ?? 0
+                    ])
+                })
+            })
+
+            const sheet3 = [['내담자명', '선생님명']]
+            clients.forEach(c => {
+                (tcData || [])
+                    .filter(tc => tc.client_id === c.id)
+                    .forEach(tc => {
+                        sheet3.push([c.name || '', teacherMap.get(tc.teacher_id) || ''])
+                    })
+            })
+
+            const wb = XLSX.utils.book_new()
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet1), '내담자')
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet2), '바우처')
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet3), '담당선생님')
+
+            XLSX.writeFile(wb, `내담자정보_${new Date().toISOString().slice(0, 10)}.xlsx`)
+            toast.success('엑셀 다운로드 완료')
+        } catch (e) {
+            console.error(e)
+            toast.error('다운로드 실패: ' + (e as Error).message)
+        }
+    }
+
+    const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+        try {
+            const data = await file.arrayBuffer()
+            const wb = XLSX.read(data, { type: 'array' })
+            const voucherNameToId = new Map(vouchers.map(v => [v.name, v.id]))
+            const teacherNameToId = new Map(teachers.map(t => [t.name, t.id]))
+            const clientNameToId = new Map(clients.map(c => [c.name, c.id]))
+            const nameToNewId = new Map<string, string>()
+
+            const sheet1 = XLSX.utils.sheet_to_json<string[]>(wb.Sheets['내담자'] || wb.Sheets[wb.SheetNames[0]], { header: 1 }) as string[][]
+            const headers1 = (sheet1[0] || []).map((h: string) => String(h).toLowerCase())
+            const nameIdx = headers1.findIndex((h: string) => h.includes('이름'))
+            const nameCol = nameIdx >= 0 ? nameIdx : 0
+            const birthIdx = headers1.findIndex((h: string) => h.includes('생년') || h.includes('birth'))
+            const phoneIdx = headers1.findIndex((h: string) => h.includes('전화') || h.includes('phone'))
+            const regIdx = headers1.findIndex((h: string) => h.includes('등록'))
+            const endIdx = headers1.findIndex((h: string) => h.includes('종료'))
+
+            for (let i = 1; i < sheet1.length; i++) {
+                const row = sheet1[i] as string[]
+                if (!row || !row[nameCol]) continue
+                const name = String(row[nameCol] || '').trim()
+                const birth = birthIdx >= 0 ? String(row[birthIdx] || '').trim() : ''
+                const phone = phoneIdx >= 0 ? String(row[phoneIdx] || '').trim() : ''
+                const regDate = regIdx >= 0 ? String(row[regIdx] || '').trim() || null : null
+                const endDate = endIdx >= 0 ? String(row[endIdx] || '').trim() || null : null
+
+                const existingId = clientNameToId.get(name)
+                const payload = {
+                    name,
+                    birth_date: birth || null,
+                    phone_number: phone || null,
+                    registration_date: regDate || null,
+                    end_date: endDate || null
+                }
+                if (existingId) {
+                    await supabase.from('clients').update(payload).eq('id', existingId)
+                    nameToNewId.set(name, existingId)
+                    if (endDate) {
+                        await supabase.from('teacher_clients').delete().eq('client_id', existingId)
+                    }
+                } else {
+                    const { data: newC } = await supabase.from('clients').insert(payload).select().single()
+                    if (newC) {
+                        nameToNewId.set(name, newC.id)
+                        clientNameToId.set(name, newC.id)
+                    }
+                }
+            }
+
+            const sheet2 = XLSX.utils.sheet_to_json<string[]>(wb.Sheets['바우처'] || wb.Sheets[wb.SheetNames[1]], { header: 1 }) as string[][]
+            if (sheet2 && sheet2.length > 1) {
+                const h2 = (sheet2[0] || []).map((x: string) => String(x))
+                const cnameIdx = h2.findIndex((x: string) => x.includes('내담자'))
+                const vnameIdx = h2.findIndex((x: string) => x.includes('바우처') && !x.includes('월'))
+                const countIdx = h2.findIndex((x: string) => x.includes('월횟수') || x.includes('횟수'))
+                const burdenIdx = h2.findIndex((x: string) => x.includes('부담') || x.includes('월본인'))
+
+                const clientVouchersToInsert: { client_id: string; voucher_id: string; monthly_session_count: number; monthly_personal_burden: number }[] = []
+                const processedClients = new Set<string>()
+
+                for (let i = 1; i < sheet2.length; i++) {
+                    const row = sheet2[i] as string[]
+                    if (!row) continue
+                    const clientName = cnameIdx >= 0 ? String(row[cnameIdx] || '').trim() : ''
+                    const voucherName = vnameIdx >= 0 ? String(row[vnameIdx] || '').trim() : ''
+                    const vid = voucherNameToId.get(voucherName)
+                    if (!vid) continue
+                    const monthlyCount = countIdx >= 0 ? parseInt(String(row[countIdx])) || 4 : 4
+                    const monthlyBurden = burdenIdx >= 0 ? parseInt(String(row[burdenIdx])) || 0 : 0
+
+                    const clientId = nameToNewId.get(clientName) || clientNameToId.get(clientName) || ''
+                    if (!clientId) continue
+
+                    if (!processedClients.has(clientId)) {
+                        await supabase.from('client_vouchers').delete().eq('client_id', clientId)
+                        processedClients.add(clientId)
+                    }
+                    clientVouchersToInsert.push({
+                        client_id: clientId,
+                        voucher_id: vid,
+                        monthly_session_count: monthlyCount,
+                        monthly_personal_burden: monthlyBurden
+                    })
+                }
+                if (clientVouchersToInsert.length > 0) {
+                    await supabase.from('client_vouchers').insert(clientVouchersToInsert.map(cv => ({ ...cv, copay: 0 })))
+                }
+            }
+
+            const sheet3 = XLSX.utils.sheet_to_json<string[]>(wb.Sheets['담당선생님'] || wb.Sheets[wb.SheetNames[2]], { header: 1 }) as string[][]
+            if (sheet3 && sheet3.length > 1) {
+                const h3 = (sheet3[0] || []).map((x: string) => String(x))
+                const cnameIdx = h3.findIndex((x: string) => x.includes('내담자'))
+                const tnameIdx = h3.findIndex((x: string) => x.includes('선생님'))
+
+                const tcByClient = new Map<string, string[]>()
+                for (let i = 1; i < sheet3.length; i++) {
+                    const row = sheet3[i] as string[]
+                    if (!row) continue
+                    const clientName = cnameIdx >= 0 ? String(row[cnameIdx] || '').trim() : ''
+                    const teacherName = tnameIdx >= 0 ? String(row[tnameIdx] || '').trim() : ''
+                    const tid = teacherNameToId.get(teacherName)
+                    if (!tid) continue
+                    const clientId = nameToNewId.get(clientName) || clientNameToId.get(clientName) || ''
+                    if (!clientId) continue
+
+                    if (!tcByClient.has(clientId)) tcByClient.set(clientId, [])
+                    if (!tcByClient.get(clientId)!.includes(tid)) tcByClient.get(clientId)!.push(tid)
+                }
+                for (const [clientId, tids] of tcByClient) {
+                    await supabase.from('teacher_clients').delete().eq('client_id', clientId)
+                    for (const tid of tids) {
+                        await supabase.from('teacher_clients').insert({ client_id: clientId, teacher_id: tid })
+                    }
+                }
+            }
+
+            toast.success('엑셀 업로드 및 반영 완료')
+            fetchData()
+        } catch (err) {
+            console.error(err)
+            toast.error('업로드 실패: ' + (err as Error).message)
+        }
+        e.target.value = ''
     }
 
     const deleteClient = async (id: string) => {
@@ -574,7 +790,7 @@ export default function SettingsPage() {
                                 </CardHeader>
                                 <CardContent>
                                     <div className="space-y-2 mb-4">
-                                        {clients.map(c => (
+                                        {clients.filter(c => !c.end_date).map(c => (
                                             <div key={c.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-gray-50">
                                                 <input
                                                     type="checkbox"
@@ -607,6 +823,19 @@ export default function SettingsPage() {
                             {editingVoucherId && <Button variant="ghost" size="sm" onClick={resetVoucherForm}><X className="w-4 h-4 mr-1" />취소</Button>}
                         </CardHeader>
                         <CardContent className="space-y-2">
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-medium text-gray-600">관리처 선택</label>
+                                <Select value={newVoucherCategory} onValueChange={setNewVoucherCategory}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="관리처 선택" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {VOUCHER_CATEGORIES.map(cat => (
+                                            <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                             <Input placeholder="바우처명" value={newVoucherName} onChange={e => setNewVoucherName(e.target.value)} />
                             <Input placeholder="월 지원금액 (원)" type="number" value={newVoucherSupport} onChange={e => setNewVoucherSupport(e.target.value)} />
                             <Button onClick={editingVoucherId ? updateVoucher : addVoucher} className="w-full">
@@ -618,10 +847,14 @@ export default function SettingsPage() {
                     <div className="space-y-2">
                         {vouchers.map(v => (
                             <div key={v.id} className={`flex justify-between items-center p-3 bg-white rounded-lg border shadow-sm ${editingVoucherId === v.id ? 'border-primary bg-blue-50' : ''}`}>
-                                <div>
+                                <div className="flex flex-col gap-0.5">
                                     <div className="font-medium">{v.name}</div>
-                                    <div className="text-sm text-gray-500">
+                                    <div className="text-sm text-gray-600">
                                         월 {v.support_amount?.toLocaleString()}원
+                                        <span className="text-gray-400 mx-1.5">/</span>
+                                        <span className="font-medium text-gray-700">
+                                            {VOUCHER_CATEGORIES.find(c => c.value === v.category)?.label || '정부'}
+                                        </span>
                                     </div>
                                 </div>
                                 <div className="flex gap-1">
@@ -648,6 +881,17 @@ export default function SettingsPage() {
                             <Input placeholder="이름" value={newClientName} onChange={e => setNewClientName(e.target.value)} />
                             <Input placeholder="전화번호 (010-0000-0000)" value={newClientPhone} onChange={e => setNewClientPhone(e.target.value)} />
                             <Input placeholder="생년월일 (YYYY-MM-DD)" value={newClientBirthDate} onChange={e => setNewClientBirthDate(e.target.value)} />
+                            <div className="grid grid-cols-2 gap-2">
+                                <div className="space-y-1">
+                                    <label className="text-xs font-medium text-gray-600">등록일</label>
+                                    <Input placeholder="등록일 (YYYY-MM-DD)" type="date" value={newClientRegDate} onChange={e => setNewClientRegDate(e.target.value)} />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs font-medium text-gray-600">종료일</label>
+                                    <Input placeholder="종료일 (YYYY-MM-DD)" type="date" value={newClientEndDate} onChange={e => setNewClientEndDate(e.target.value)} />
+                                </div>
+                            </div>
+                            <p className="text-xs text-amber-600">종료일 입력 시 담당선생님 연결이 해제되고 정산에서 제외됩니다.</p>
 
                             <div className="space-y-2 pt-2">
                                 <p className="text-sm font-medium text-gray-700">이용 바우처 선택</p>
@@ -696,6 +940,29 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* 엑셀 다운로드/업로드 */}
+                    <div className="space-y-2 mb-4">
+                        <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={exportClientsToExcel} className="flex items-center gap-1.5">
+                            <Download className="w-4 h-4" />
+                            엑셀 다운로드
+                        </Button>
+                        <label className="cursor-pointer">
+                            <input
+                                type="file"
+                                accept=".xlsx,.xls"
+                                onChange={handleExcelUpload}
+                                className="hidden"
+                            />
+                            <span className="inline-flex items-center justify-center gap-1.5 rounded-md text-sm font-medium border border-input bg-background px-4 py-2 hover:bg-accent hover:text-accent-foreground">
+                                <Upload className="w-4 h-4" />
+                                엑셀 업로드
+                            </span>
+                        </label>
+                        </div>
+                        <p className="text-xs text-gray-500">다운로드한 엑셀을 수정 후 업로드하면 반영됩니다. 내담자명·바우처명·선생님명으로 연결되므로 이름을 정확히 맞춰주세요.</p>
+                    </div>
+
                     {/* Filter UI */}
                     <div className="flex gap-2 mb-2 items-center bg-gray-50 p-2 rounded-md border">
                         <div className="relative flex-1">
@@ -727,9 +994,17 @@ export default function SettingsPage() {
                                     <div className="font-medium flex items-center gap-2">
                                         {c.name}
                                         {c.birth_date && <span className="text-xs text-gray-500 font-normal">({c.birth_date})</span>}
+                                        {c.end_date && <span className="text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">종료</span>}
                                     </div>
                                     <div className="text-right">
                                         <div className="text-sm text-gray-500">{c.phone_number || '-'}</div>
+                                        {(c.registration_date || c.end_date) && (
+                                            <div className="text-xs text-gray-400">
+                                                {c.registration_date && `등록: ${c.registration_date}`}
+                                                {c.registration_date && c.end_date && ' · '}
+                                                {c.end_date && `종료: ${c.end_date}`}
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex gap-1 ml-2">
                                         <Button variant="ghost" size="icon" onClick={() => startEditClient(c)}>

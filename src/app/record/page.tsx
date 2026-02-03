@@ -93,10 +93,11 @@ function RecordContent() {
         }
     }
 
-    // Filter clients when teacher or assignments change
+    // Filter clients when teacher or assignments change (종료일 있는 내담자 제외)
+    const activeClients = allClients.filter(c => !c.end_date)
     useEffect(() => {
         if (!selectedTeacher) {
-            setFilteredClients(allClients)
+            setFilteredClients(activeClients)
             return
         }
         const assignedClientIds = teacherAssignments
@@ -104,7 +105,7 @@ function RecordContent() {
             .map(a => a.client_id)
 
         if (assignedClientIds.length > 0) {
-            setFilteredClients(allClients.filter(c => assignedClientIds.includes(c.id)))
+            setFilteredClients(activeClients.filter(c => assignedClientIds.includes(c.id)))
         } else {
             setFilteredClients([])
         }
@@ -147,14 +148,19 @@ function RecordContent() {
 
         const breakdown: string[] = []
 
-        // Fetch usages early for logic
+        // Fetch usages early for logic (이번 달 + 전달 이월용)
         let usages: { vid: string, used: number, count: number }[] = []
+        let rollovers: { vid: string, rollover: number }[] = []
         if (selectedVouchers.length > 0) {
             const startOfMonth = new Date(date)
             startOfMonth.setDate(1)
             const startStr = format(startOfMonth, 'yyyy-MM-dd')
             const endOfMonth = new Date(new Date(date).getFullYear(), new Date(date).getMonth() + 1, 0)
             const endStr = format(endOfMonth, 'yyyy-MM-dd')
+            const prevMonthStart = new Date(new Date(date).getFullYear(), new Date(date).getMonth() - 1, 1)
+            const prevMonthEnd = new Date(new Date(date).getFullYear(), new Date(date).getMonth(), 0)
+            const prevStartStr = format(prevMonthStart, 'yyyy-MM-dd')
+            const prevEndStr = format(prevMonthEnd, 'yyyy-MM-dd')
 
             try {
                 usages = await Promise.all(selectedVouchers.map(async vid => {
@@ -175,6 +181,22 @@ function RecordContent() {
                     const count = data?.length || 0
                     return { vid, used, count }
                 }))
+
+                // 전달 남은 횟수 → 이번 달 이월
+                rollovers = await Promise.all(selectedVouchers.map(async vid => {
+                    const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === vid)
+                    const monthlyCount = cv?.monthly_session_count || 4
+                    const { data } = await supabase
+                        .from('session_vouchers')
+                        .select('id, sessions!inner(date, client_id)')
+                        .eq('voucher_id', vid)
+                        .eq('sessions.client_id', selectedClient)
+                        .gte('sessions.date', prevStartStr)
+                        .lte('sessions.date', prevEndStr)
+                    const usedLastMonth = data?.length || 0
+                    const rollover = Math.max(0, monthlyCount - usedLastMonth)
+                    return { vid, rollover }
+                }))
             } catch (e) {
                 console.error('Usage fetch failed:', e)
             }
@@ -186,6 +208,9 @@ function RecordContent() {
         let totalDeducted = 0
         let totalGovSupport = 0
         let finalClientCost = 0
+        let currentTotalUsedCount = 0 // 복합바우처용: 묶인 수업 1회 = 1회
+        let isAllEducationOffice = false // 교육청 다중 시 본인부담 0
+        let avgSessionLimitForDeduction = 0 // 다중 블록에서 1회 차감액으로 사용
         const voucherUsageMap: Record<string, number> = {}
 
         // 2. Determine Session Fee Logic
@@ -195,7 +220,6 @@ function RecordContent() {
             let totalMonthlyLimit = 0
             let totalMonthlyCount = 0
             let totalMonthlyBurden = 0
-            let currentTotalUsedCount = 0
 
             // Helper to get Client Voucher info easily
             const cvMap = new Map()
@@ -209,18 +233,31 @@ function RecordContent() {
                 const voucher = vouchers.find(v => v.id === vid)
                 const cv = cvMap.get(vid)
                 const usage = usages.find(u => u.vid === vid)
+                const rollover = rollovers.find(r => r.vid === vid)?.rollover || 0
+                const isEdu = voucher?.category === 'education_office'
+                const support = voucher?.support_amount || 0
+                const burden = cv?.monthly_personal_burden || 0
 
-                totalMonthlyLimit += (voucher?.support_amount || 0)
-                totalMonthlyCount += (cv?.monthly_session_count || 4)
-                totalMonthlyBurden += (cv?.monthly_personal_burden || 0)
-                currentTotalUsedCount += (usage?.count || 0)
+                // 교육청 다중: 월 지원금 - 개인부담금 = 실제 적용 금액
+                const effectiveSupport = isEdu ? Math.max(0, support - burden) : support
+                totalMonthlyLimit += effectiveSupport
+                totalMonthlyCount += (cv?.monthly_session_count || 4) + rollover
+                totalMonthlyBurden += isEdu ? 0 : burden
+                // 복합바우처: 묶인 수업 1회 = 1회 차감 (각 바우처별 count 합산 X, max 사용)
+                currentTotalUsedCount = Math.max(currentTotalUsedCount, usage?.count || 0)
             }
 
             // 2. Calculate Per Session Averages (Pooled)
-            // Avoid division by zero
+            isAllEducationOffice = selectedVouchers.every(vid => {
+                const v = vouchers.find(voucher => voucher.id === vid)
+                return v?.category === 'education_office'
+            })
+            const effectiveTotalBurden = totalMonthlyBurden
+
             const pooledCount = totalMonthlyCount > 0 ? totalMonthlyCount : 1
             const avgSessionLimit = Math.floor(totalMonthlyLimit / pooledCount) // "Face Value" to deduct per session
-            const avgSessionBurden = Math.floor(totalMonthlyBurden / pooledCount) // Client burden portion within Face Value
+            avgSessionLimitForDeduction = avgSessionLimit
+            const avgSessionBurden = Math.floor(effectiveTotalBurden / pooledCount) // Client burden (교육청 다중 시 0)
             const avgPureGovSupport = avgSessionLimit - avgSessionBurden
 
             // 3. Current Session Status
@@ -245,8 +282,9 @@ function RecordContent() {
             // Re-calculate session components explicitly to match Single Logic structure if needed, 
             // but `sessionFee` IS the Total Target Fee.
 
-            breakdown.push(`[복합결제] 통합 바우처 적용`)
-            breakdown.push(`- 통합 한도: ${totalMonthlyLimit.toLocaleString()}원 / 통합 횟수: ${totalMonthlyCount}회`)
+            const totalRollover = rollovers.reduce((s, r) => s + r.rollover, 0)
+            breakdown.push(`[복합결제] 통합 바우처 적용${isAllEducationOffice ? ' (교육청: 월지원-개인부담 적용)' : ''}`)
+            breakdown.push(`- 통합 한도: ${totalMonthlyLimit.toLocaleString()}원 / 통합 횟수: ${totalMonthlyCount}회${totalRollover > 0 ? ` (전달 이월 +${totalRollover}회)` : ''}`)
             breakdown.push(`- 1회 평균 지원금(한도차감액): ${avgSessionLimit.toLocaleString()}원`)
 
             if (isOverLimit) {
@@ -290,7 +328,10 @@ function RecordContent() {
 
                     const voucher = vouchers.find(v => v.id === vid)
                     const usage = usages.find(u => u.vid === vid)
-                    const vLimit = voucher?.support_amount || 0
+                    const cv = cvMap.get(vid)
+                    const vSupport = voucher?.support_amount || 0
+                    const vBurden = cv?.monthly_personal_burden || 0
+                    const vLimit = (voucher?.category === 'education_office') ? Math.max(0, vSupport - vBurden) : vSupport
                     const vUsed = usage?.used || 0
                     const vRemaining = Math.max(0, vLimit - vUsed)
 
@@ -340,6 +381,7 @@ function RecordContent() {
             const vid = selectedVouchers[0]
             const voucher = vouchers.find(v => v.id === vid)
             const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
+            const rollover = rollovers.find(r => r.vid === vid)?.rollover || 0
 
             // New Logic: Monthly Based Calculation
             const monthlySupportTotal = voucher?.support_amount || 0 // Total Monthly Value (Gov + Personal)
@@ -366,7 +408,7 @@ function RecordContent() {
             const sessionSupport = baseSessionSupport
 
             breakdown.push(`[단일결제] ${voucher?.name}`)
-            breakdown.push(`- 월 총액: ${monthlySupportTotal.toLocaleString()}원 / 월 ${monthlyCount}회`)
+            breakdown.push(`- 월 총액: ${monthlySupportTotal.toLocaleString()}원 / 월 ${monthlyCount}회${rollover > 0 ? ` (전달 이월 +${rollover}회)` : ''}`)
             breakdown.push(`- 1회 기본 수업료: ${baseSessionFee.toLocaleString()}원`)
             breakdown.push(`- 1회 기본 본인부담금: ${baseSessionBurden.toLocaleString()}원`)
 
@@ -419,55 +461,42 @@ function RecordContent() {
         }
 
 
-        // 3. Calculate Deduction & Client Cost
+        // 3. Calculate Deduction & Client Cost (바우처별 차감 배분 - voucherUsageMap용)
         if (selectedVouchers.length > 0 && isMulti) {
-            feeRemaining = sessionFee
-            // Original Deduction Logic for Multi (or Fallback)
+            // 1회 차감액(avgSessionLimit)만큼만 바우처에서 차감 (sessionFee 아님)
+            // totalDeducted/totalGovSupport/finalClientCost는 1번 블록 값 유지
+            let remainingToDeduct = avgSessionLimitForDeduction
             for (const vid of selectedVouchers) {
-                if (feeRemaining <= 0) break // Covered
+                if (remainingToDeduct <= 0) break // Covered
 
                 const voucher = vouchers.find(v => v.id === vid)
                 const usageInfo = usages.find(u => u.vid === vid)
                 const usedAmount = usageInfo?.used || 0
-                const limit = voucher?.support_amount || 0
+                const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === vid)
+                const mBurden = cv?.monthly_personal_burden || 0
+                const mTotal = voucher?.support_amount || 0
+                const mCount = cv?.monthly_session_count || 4
+
+                // 교육청 다중: 월 지원금 - 개인부담금 = 실제 한도
+                const isEdu = voucher?.category === 'education_office'
+                const limit = isEdu ? Math.max(0, mTotal - mBurden) : mTotal
 
                 const remainingLimit = Math.max(0, limit - usedAmount)
 
-                // Deduct from this voucher
-                const deduction = Math.min(feeRemaining, remainingLimit)
+                // Deduct from this voucher (1회 차감액만큼만)
+                const deduction = Math.min(remainingToDeduct, remainingLimit)
 
-                // Calculate Gov Portion for this deduction
-                // Deduction is from "Total Pot" (Gov + Burden).
-                // We need to find how much of this deduction is Burden.
-                // Ratio: burden / (support + burden)? No, monthlySupportTotal includes burden.
-                // Gov Portion = deduction * ( (monthlySupport - burden) / monthlySupport )? 
-
-                // Let's get the ratios from monthly data
-                const mTotal = voucher?.support_amount || 0
-                // We need client specific burden for this voucher? 
-                // Wait, `selectedVouchers` loop doesn't easily give us the client's burden without finding `clientVoucher` again.
-                // We should fetch client vouchers map earlier or find it here.
-                const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === vid)
-                const mCount = cv?.monthly_session_count || 4
-                const mBurden = cv?.monthly_personal_burden || 0
-
-                // Per session amounts
+                // 정부: deduction 중 burden 비율. 교육청: 이미 한도에서 차감했으므로 burden 0
                 const sTotal = Math.floor(mTotal / mCount)
                 const sBurden = Math.floor(mBurden / mCount)
-
-                // If sTotal is 0 (edge case), ratio is 0.
                 let burdenRatio = 0
-                if (sTotal > 0) {
-                    burdenRatio = sBurden / sTotal
-                }
+                if (!isEdu && sTotal > 0) burdenRatio = sBurden / sTotal
 
                 const burdenPart = Math.floor(deduction * burdenRatio)
                 const govPart = deduction - burdenPart
 
                 voucherUsageMap[vid] = deduction
-                feeRemaining -= deduction
-                totalDeducted += deduction
-                totalGovSupport += govPart
+                remainingToDeduct -= deduction
 
                 breakdown.push(`--- ${voucher?.name} ---`)
                 breakdown.push(`잔여 한도: ${remainingLimit.toLocaleString()} / 차감: -${deduction.toLocaleString()}`)
@@ -478,8 +507,8 @@ function RecordContent() {
         // 4. Final Client Cost Calculation
         // let finalClientCost = 0 // Hoisted
         if (isMulti) {
-            // Multi: Client pays whatever is NOT covered by limits
-            finalClientCost = feeRemaining
+            // Multi: 본인부담 포함 시 totalGovSupport 사용, 교육청 다중(본인부담0) 시 totalDeducted 사용
+            finalClientCost = Math.max(0, sessionFee - totalGovSupport)
             breakdown.push(`----------------`)
             breakdown.push(`총 한도 차감: -${totalDeducted.toLocaleString()}원`)
             breakdown.push(`차액 (내담자 부담): ${finalClientCost.toLocaleString()}원`)
@@ -493,11 +522,13 @@ function RecordContent() {
             const vid = selectedVouchers[0]
             const voucher = vouchers.find(v => v.id === vid)
             const usageInfo = usages.find(u => u.vid === vid)
+            const rollover = rollovers.find(r => r.vid === vid)?.rollover || 0
             const usedAmount = usageInfo?.used || 0
             const limit = voucher?.support_amount || 0 // Total Limit
 
             const clientVoucher = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === vid)
             const monthlyCount = clientVoucher?.monthly_session_count || 4
+            const availableCount = monthlyCount + rollover
             const monthlyBurden = clientVoucher?.monthly_personal_burden || 0
 
             const baseSessionFee = Math.floor(limit / monthlyCount)
@@ -512,10 +543,10 @@ function RecordContent() {
                 extraCost = extraUnits * extraFeeUnit
             }
 
-            // Session Count Check
+            // Session Count Check (이월 포함)
             const existingCount = usageInfo?.count || 0
             const currentSessionNum = existingCount + 1
-            const isOverLimit = currentSessionNum > monthlyCount
+            const isOverLimit = currentSessionNum > availableCount
 
             // Update UI State for counts
             // We can't set state directly in calculateFee (infinite loop potential if not careful).
@@ -533,7 +564,7 @@ function RecordContent() {
                 totalGovSupport = 0
                 finalClientCost = sessionFee
 
-                breakdown.push(`[초과 수업] ${voucher?.name} (월 ${monthlyCount}회 초과)`)
+                breakdown.push(`[초과 수업] ${voucher?.name} (월 ${availableCount}회 초과${rollover > 0 ? `, 이월+${rollover}회 포함` : ''})`)
                 breakdown.push(`- 현재 ${currentSessionNum}회차 수업입니다.`)
                 breakdown.push(`- 지원 한도 초과로 센터 기본수업료가 적용됩니다.`)
                 breakdown.push(`= 1회 최종 수업료: ${sessionFee.toLocaleString()}원 (전액 본인부담)`)
@@ -676,23 +707,21 @@ function RecordContent() {
             breakdown,
             voucherUsageMap,
             sessionCounts: isMulti ? selectedVouchers.reduce((acc, vid) => {
-                // Pooled Display: Show Total Used / Total Pooled Count for clear visibility
+                // Pooled Display: 묶인 수업 1회 = 1회 (이월 포함)
                 let totalC = 0
-                let totalU = 0
                 for (const svid of selectedVouchers) {
                     const cv = clientVouchers.find(c => c.client_id === selectedClient && c.voucher_id === svid)
-                    const u = usages.find(use => use.vid === svid)
-                    totalC += (cv?.monthly_session_count || 4)
-                    totalU += (u?.count || 0)
+                    const r = rollovers.find(x => x.vid === svid)?.rollover || 0
+                    totalC += (cv?.monthly_session_count || 4) + r
                 }
-                // Current session is 1 more than already used
-                const current = totalU + 1
+                const current = currentTotalUsedCount + 1
                 acc[vid] = { current, total: totalC }
                 return acc
             }, {} as Record<string, { current: number, total: number }>) : usages.reduce((acc, curr) => {
-                // Single/Individual Logic
+                // Single: 이월 포함
                 const v = clientVouchers.find(cv => cv.client_id === selectedClient && cv.voucher_id === curr.vid)
-                acc[curr.vid] = { current: curr.count + 1, total: v?.monthly_session_count || 4 }
+                const r = rollovers.find(x => x.vid === curr.vid)?.rollover || 0
+                acc[curr.vid] = { current: curr.count + 1, total: (v?.monthly_session_count || 4) + r }
                 return acc
             }, {} as Record<string, { current: number, total: number }>)
         })

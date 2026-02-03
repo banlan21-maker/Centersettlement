@@ -17,7 +17,8 @@ create table if not exists vouchers (
   name text not null,
   support_amount integer default 0,
   client_copay integer default 0, -- Legacy
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  category text default 'government', -- 관리처: education_office(교육청), government(정부)
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
 -- Clients Table
@@ -25,6 +26,8 @@ create table if not exists clients (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   birth_date date,
+  registration_date date,
+  end_date date,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -73,6 +76,8 @@ alter table teachers add column if not exists birth_date date;
 alter table teachers add column if not exists phone_number text;
 alter table clients add column if not exists birth_date date;
 alter table clients add column if not exists phone_number text;
+alter table clients add column if not exists registration_date date;
+alter table clients add column if not exists end_date date;
 
 -- RLS Policies
 alter table teachers enable row level security;
